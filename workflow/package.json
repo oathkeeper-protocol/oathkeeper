@@ -1,0 +1,19 @@
+{
+  "name": "oathkeeper-workflow",
+  "version": "1.0.0",
+  "description": "Chainlink CRE workflow for OathKeeper SLA enforcement",
+  "main": "workflow.ts",
+  "scripts": {
+    "simulate": "cre workflow simulate --verbose",
+    "simulate:broadcast": "cre workflow simulate --verbose --broadcast",
+    "dev": "ts-node workflow.ts"
+  },
+  "dependencies": {
+    "@chainlink/cre-sdk": "^1.0.0",
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.0.0"
+  }
+}
