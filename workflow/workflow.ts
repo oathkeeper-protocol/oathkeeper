@@ -1,168 +1,270 @@
-// workflow.ts
-// OathKeeper — Chainlink CRE Workflow for SLA Enforcement
-// Triggers: Cron (every 15 min) + EVM Log (ClaimFiled events)
-// Actions: Read uptime API → check breach → write recordBreach() on-chain
+// OathKeeper — Chainlink CRE Workflow
+// Monitors SLA compliance for tokenized real-world assets
+// Triggers: Cron (every 15 min) + EVM Log (ClaimFiled event)
+// Actions: fetch uptime → detect breach → write recordBreach() on-chain
 
-import { workflow, triggers, capabilities } from "@chainlink/cre-sdk";
+import {
+  cre,
+  Runner,
+  type Runtime,
+  encodeCallMsg,
+  prepareReportRequest,
+  LAST_FINALIZED_BLOCK_NUMBER,
+  bytesToHex,
+  json,
+  ok,
+  getNetwork,
+  consensusIdenticalAggregation,
+} from "@chainlink/cre-sdk";
+import {
+  encodeFunctionData,
+  decodeFunctionResult,
+  keccak256,
+  toBytes,
+  toHex,
+  getAddress,
+  zeroAddress,
+  type Address,
+} from "viem";
+import { z } from "zod";
 
-const { httpClient, evmClient } = capabilities;
+// --- Config schema (injected by CRE runtime) ---
+const configSchema = z.object({
+  slaContractAddress: z.string().describe("Deployed SLAEnforcement contract address"),
+  uptimeApiUrl: z.string().describe("Base URL for uptime API"),
+  chainSelectorName: z.string(),
+});
 
-// Contract deployed on Tenderly Virtual TestNet (Sepolia fork)
-const SLA_CONTRACT = process.env.SLA_CONTRACT_ADDRESS || "0x0000000000000000000000000000000000000000";
+type Config = z.infer<typeof configSchema>;
 
-// Minimal ABI for the functions we need
+// --- Minimal ABI ---
 const SLA_ABI = [
   {
-    "inputs": [],
-    "name": "slaCount",
-    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
-    "stateMutability": "view",
-    "type": "function"
+    inputs: [],
+    name: "slaCount",
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
   },
   {
-    "inputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
-    "name": "slas",
-    "outputs": [
-      { "internalType": "address", "name": "provider", "type": "address" },
-      { "internalType": "address", "name": "tenant", "type": "address" },
-      { "internalType": "uint256", "name": "bondAmount", "type": "uint256" },
-      { "internalType": "uint256", "name": "responseTimeHrs", "type": "uint256" },
-      { "internalType": "uint256", "name": "minUptimeBps", "type": "uint256" },
-      { "internalType": "uint256", "name": "penaltyBps", "type": "uint256" },
-      { "internalType": "uint256", "name": "createdAt", "type": "uint256" },
-      { "internalType": "bool", "name": "active", "type": "bool" }
+    inputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    name: "slas",
+    outputs: [
+      { internalType: "address", name: "provider", type: "address" },
+      { internalType: "address", name: "tenant", type: "address" },
+      { internalType: "uint256", name: "bondAmount", type: "uint256" },
+      { internalType: "uint256", name: "responseTimeHrs", type: "uint256" },
+      { internalType: "uint256", name: "minUptimeBps", type: "uint256" },
+      { internalType: "uint256", name: "penaltyBps", type: "uint256" },
+      { internalType: "uint256", name: "createdAt", type: "uint256" },
+      { internalType: "bool", name: "active", type: "bool" },
     ],
-    "stateMutability": "view",
-    "type": "function"
+    stateMutability: "view",
+    type: "function",
   },
   {
-    "inputs": [
-      { "internalType": "uint256", "name": "slaId", "type": "uint256" },
-      { "internalType": "uint256", "name": "uptimeBps", "type": "uint256" },
-      { "internalType": "uint256", "name": "penaltyBps", "type": "uint256" }
+    inputs: [
+      { internalType: "uint256", name: "slaId", type: "uint256" },
+      { internalType: "uint256", name: "uptimeBps", type: "uint256" },
+      { internalType: "uint256", name: "penaltyBps", type: "uint256" },
     ],
-    "name": "recordBreach",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
+    name: "recordBreach",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
   },
-  {
-    "anonymous": false,
-    "inputs": [
-      { "indexed": true, "internalType": "uint256", "name": "claimId", "type": "uint256" },
-      { "indexed": true, "internalType": "uint256", "name": "slaId", "type": "uint256" },
-      { "indexed": false, "internalType": "address", "name": "tenant", "type": "address" }
-    ],
-    "name": "ClaimFiled",
-    "type": "event"
-  }
 ] as const;
 
-const UPTIME_API_BASE = process.env.UPTIME_API_URL || "http://localhost:3001";
+// --- EVM helpers ---
 
-export default workflow({
-  triggers: [
-    // Proactive: check every 15 minutes for compliance
-    triggers.cron({ schedule: "*/15 * * * *" }),
+function readSlaCount(
+  runtime: Runtime<Config>,
+  evmClient: InstanceType<typeof cre.capabilities.EVMClient>,
+  contractAddress: Address
+): bigint {
+  const callData = encodeFunctionData({ abi: SLA_ABI, functionName: "slaCount" });
+  const reply = evmClient.callContract(runtime, {
+    call: encodeCallMsg({ from: zeroAddress, to: contractAddress, data: callData }),
+    blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+  }).result();
 
-    // Reactive: immediately check when a new claim is filed
-    triggers.evmLog({
-      address: SLA_CONTRACT,
-      event: "ClaimFiled(uint256 indexed claimId, uint256 indexed slaId, address tenant)",
-    }),
-  ],
+  return decodeFunctionResult({
+    abi: SLA_ABI,
+    functionName: "slaCount",
+    data: bytesToHex(reply.data),
+  }) as bigint;
+}
 
-  async callback({ trigger, secrets }) {
-    console.log(`[OathKeeper] Workflow triggered: ${trigger.type}`);
+type SLAData = {
+  provider: Address;
+  tenant: Address;
+  bondAmount: bigint;
+  minUptimeBps: bigint;
+  penaltyBps: bigint;
+  active: boolean;
+};
 
-    // 1. Get total SLA count from contract
-    const slaCount = await evmClient.read({
-      address: SLA_CONTRACT,
-      abi: SLA_ABI,
-      functionName: "slaCount",
-    }) as bigint;
+function readSla(
+  runtime: Runtime<Config>,
+  evmClient: InstanceType<typeof cre.capabilities.EVMClient>,
+  contractAddress: Address,
+  slaId: number
+): SLAData {
+  const callData = encodeFunctionData({ abi: SLA_ABI, functionName: "slas", args: [BigInt(slaId)] });
+  const reply = evmClient.callContract(runtime, {
+    call: encodeCallMsg({ from: zeroAddress, to: contractAddress, data: callData }),
+    blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+  }).result();
 
-    console.log(`[OathKeeper] Checking ${slaCount} SLAs for compliance`);
+  const result = decodeFunctionResult({
+    abi: SLA_ABI,
+    functionName: "slas",
+    data: bytesToHex(reply.data),
+  }) as readonly [Address, Address, bigint, bigint, bigint, bigint, bigint, boolean];
 
-    const breachResults: Array<{
-      slaId: number;
-      provider: string;
-      uptimeBps: number;
-      minUptimeBps: number;
-      penaltyBps: number;
-    }> = [];
+  return {
+    provider: result[0],
+    tenant: result[1],
+    bondAmount: result[2],
+    minUptimeBps: result[4],
+    penaltyBps: result[5],
+    active: result[7],
+  };
+}
 
-    // 2. Iterate over all active SLAs
-    for (let i = 0; i < Number(slaCount); i++) {
-      const sla = await evmClient.read({
-        address: SLA_CONTRACT,
-        abi: SLA_ABI,
-        functionName: "slas",
-        args: [BigInt(i)],
-      }) as {
-        provider: string;
-        tenant: string;
-        bondAmount: bigint;
-        responseTimeHrs: bigint;
-        minUptimeBps: bigint;
-        penaltyBps: bigint;
-        createdAt: bigint;
-        active: boolean;
-      };
+function writeBreach(
+  runtime: Runtime<Config>,
+  evmClient: InstanceType<typeof cre.capabilities.EVMClient>,
+  contractAddress: Address,
+  slaId: number,
+  uptimeBps: number,
+  penaltyBps: bigint
+): void {
+  const callData = encodeFunctionData({
+    abi: SLA_ABI,
+    functionName: "recordBreach",
+    args: [BigInt(slaId), BigInt(uptimeBps), penaltyBps],
+  });
 
-      if (!sla.active) {
-        console.log(`[OathKeeper] SLA ${i} is inactive, skipping`);
-        continue;
-      }
+  const report = runtime.report(prepareReportRequest(callData)).result();
+  evmClient.writeReport(runtime, {
+    receiver: toHex(toBytes(contractAddress, { size: 20 })),
+    report,
+  }).result();
+}
 
-      const apiKey = secrets?.API_KEY || "demo-key";
+// --- Core SLA scan logic (shared by cron and log handlers) ---
+function scanSLAs(runtime: Runtime<Config>): { breachCount: number } {
+  const config = runtime.config;
+  const contractAddress = getAddress(config.slaContractAddress) as Address;
 
-      // 3. Fetch off-chain uptime metrics from provider API
-      let uptimeBps: number;
-      try {
-        const response = await httpClient.get(
-          `${UPTIME_API_BASE}/provider/${sla.provider}/uptime`,
-          { headers: { Authorization: `Bearer ${apiKey}` } }
-        );
+  const network = getNetwork({
+    chainFamily: "evm",
+    chainSelectorName: config.chainSelectorName,
+    isTestnet: true,
+  });
+  if (!network) throw new Error(`Unknown chain: ${config.chainSelectorName}`);
 
-        const data = response.json() as { uptimePercent: number; provider: string };
-        uptimeBps = Math.round(data.uptimePercent * 100); // Convert 99.5% → 9950 bps
-        console.log(`[OathKeeper] SLA ${i}: provider ${sla.provider} uptime ${data.uptimePercent}% (${uptimeBps} bps)`);
-      } catch (err) {
-        console.error(`[OathKeeper] Failed to fetch uptime for SLA ${i}:`, err);
-        continue;
-      }
+  const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
+  const httpClient = new cre.capabilities.HTTPClient();
 
-      const minUptimeBps = Number(sla.minUptimeBps);
-      const penaltyBps = Number(sla.penaltyBps);
+  const apiKey = runtime.getSecret({ id: "UPTIME_API_KEY" }).result().value || "demo-key";
 
-      // 4. Check if SLA is breached
-      if (uptimeBps < minUptimeBps) {
-        console.log(`[OathKeeper] BREACH DETECTED: SLA ${i} — uptime ${uptimeBps} < minimum ${minUptimeBps}`);
+  const slaCount = readSlaCount(runtime, evmClient, contractAddress);
+  runtime.log(`[OathKeeper] Checking ${slaCount} SLAs`);
 
-        breachResults.push({
-          slaId: i,
-          provider: sla.provider,
-          uptimeBps,
-          minUptimeBps,
-          penaltyBps,
-        });
+  let breachCount = 0;
 
-        // 5. Record breach on-chain — slashes bond, transfers penalty to tenant
-        await evmClient.write({
-          address: SLA_CONTRACT,
-          abi: SLA_ABI,
-          functionName: "recordBreach",
-          args: [BigInt(i), BigInt(uptimeBps), BigInt(penaltyBps)],
-        });
+  for (let i = 0; i < Number(slaCount); i++) {
+    const sla = readSla(runtime, evmClient, contractAddress, i);
+    if (!sla.active) continue;
 
-        console.log(`[OathKeeper] Breach recorded on-chain for SLA ${i}. Penalty: ${penaltyBps} bps of bond`);
-      } else {
-        console.log(`[OathKeeper] SLA ${i} compliant: uptime ${uptimeBps} >= minimum ${minUptimeBps}`);
-      }
+    // Fetch uptime in node mode — all DON nodes must agree (consensus)
+    const rawUptimeData = runtime.runInNodeMode(
+      (nodeRuntime) => {
+        const response = httpClient.sendRequest(nodeRuntime, {
+          url: `${config.uptimeApiUrl}/provider/${sla.provider}/uptime`,
+          method: "GET",
+          headers: { Authorization: `Bearer ${apiKey}` },
+        }).result();
+
+        if (!ok(response)) {
+          throw new Error(`HTTP ${response.statusCode}`);
+        }
+
+        return json(response);
+      },
+      // Consensus: identical value required across all DON nodes
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      consensusIdenticalAggregation() as any
+    )().result();
+
+    const uptimeData = rawUptimeData as { uptimePercent: number };
+    const uptimeBps = Math.round(uptimeData.uptimePercent * 100);
+    const minUptimeBps = Number(sla.minUptimeBps);
+
+    runtime.log(`[OathKeeper] SLA ${i}: ${uptimeBps} bps (min: ${minUptimeBps})`);
+
+    if (uptimeBps < minUptimeBps) {
+      runtime.log(`[OathKeeper] BREACH SLA ${i}: ${uptimeBps} < ${minUptimeBps} — slashing bond`);
+      writeBreach(runtime, evmClient, contractAddress, i, uptimeBps, sla.penaltyBps);
+      breachCount++;
     }
+  }
 
-    console.log(`[OathKeeper] Scan complete. Breaches detected: ${breachResults.length}`);
-    return { breachesDetected: breachResults.length, breaches: breachResults };
-  },
-});
+  runtime.log(`[OathKeeper] Done. Breaches: ${breachCount}`);
+  return { breachCount };
+}
+
+// --- Handlers ---
+
+const onCronTrigger = (runtime: Runtime<Config>) => {
+  runtime.log("[OathKeeper] Cron triggered — scanning all SLAs");
+  return scanSLAs(runtime);
+};
+
+const onClaimFiled = (runtime: Runtime<Config>) => {
+  runtime.log("[OathKeeper] ClaimFiled event — immediate compliance scan");
+  return scanSLAs(runtime);
+};
+
+// --- Workflow init ---
+const initWorkflow = (config: Config) => {
+  const network = getNetwork({
+    chainFamily: "evm",
+    chainSelectorName: config.chainSelectorName,
+    isTestnet: true,
+  });
+  if (!network) throw new Error(`Unknown chain: ${config.chainSelectorName}`);
+  const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
+  const contractAddress = getAddress(config.slaContractAddress) as Address;
+
+  // Cron: every 15 minutes
+  const cron = new cre.capabilities.CronCapability();
+  const cronTrigger = cron.trigger({ schedule: "0 */15 * * * *" });
+
+  // EVM Log: ClaimFiled(uint256 indexed claimId, uint256 indexed slaId, address tenant)
+  const claimFiledTopic = keccak256(toBytes("ClaimFiled(uint256,uint256,address)"));
+  const logTrigger = evmClient.logTrigger({
+    addresses: [toHex(toBytes(contractAddress, { size: 20 }))],
+    topics: [
+      { values: [claimFiledTopic] },
+      { values: [] },
+      { values: [] },
+      { values: [] },
+    ],
+  });
+
+  return [
+    cre.handler(cronTrigger, onCronTrigger),
+    cre.handler(logTrigger, onClaimFiled),
+  ];
+};
+
+// --- Entry point ---
+export async function main() {
+  const runner = await Runner.newRunner<Config>({ configSchema });
+  await runner.run(initWorkflow);
+}
+
+await main();

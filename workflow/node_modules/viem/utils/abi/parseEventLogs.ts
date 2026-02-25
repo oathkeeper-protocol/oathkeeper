@@ -1,17 +1,13 @@
 // TODO(v3): checksum address.
 
 import type { Abi, AbiEvent, AbiEventParameter, Address } from 'abitype'
-import {
-  AbiEventSignatureNotFoundError,
-  DecodeLogDataMismatch,
-  DecodeLogTopicsMismatch,
-} from '../../errors/abi.js'
 import type { ErrorType } from '../../errors/utils.js'
 import type { ContractEventName, GetEventArgs } from '../../types/contract.js'
 import type { Log } from '../../types/log.js'
 import type { RpcLog } from '../../types/rpc.js'
 import { isAddressEqual } from '../address/isAddressEqual.js'
 import { toBytes } from '../encoding/toBytes.js'
+import { formatLog } from '../formatters/log.js'
 import { keccak256 } from '../hash/keccak256.js'
 import { toEventSelector } from '../hash/toEventSelector.js'
 import {
@@ -113,54 +109,88 @@ export function parseEventLogs<
     return [parameters.eventName as string]
   })()
 
+  const abiTopics = (abi as Abi)
+    .filter((abiItem) => abiItem.type === 'event')
+    .map((abiItem) => ({
+      abi: abiItem,
+      selector: toEventSelector(abiItem),
+    }))
+
   return logs
     .map((log) => {
-      try {
-        const abiItem = (abi as Abi).find(
-          (abiItem) =>
-            abiItem.type === 'event' &&
-            log.topics[0] === toEventSelector(abiItem),
-        ) as AbiEvent
-        if (!abiItem) return null
+      // Normalize RpcLog (hex-encoded quantities) to Log (bigint/number).
+      // When logs come directly from an RPC response (e.g. eth_getLogs),
+      // fields like blockNumber are hex strings instead of bigints.
+      const formattedLog =
+        typeof log.blockNumber === 'string' ? formatLog(log as RpcLog) : log
 
-        const event = decodeEventLog({
-          ...log,
-          abi: [abiItem],
-          strict,
-        })
+      // Find all matching ABI items with the same selector.
+      // Multiple events can share the same selector but differ in indexed parameters
+      // (e.g., ERC20 vs ERC721 Transfer events).
+      const abiItems = abiTopics.filter(
+        (abiTopic) => formattedLog.topics[0] === abiTopic.selector,
+      )
+      if (abiItems.length === 0) return null
 
-        // Check that the decoded event name matches the provided event name.
-        if (eventName && !eventName.includes(event.eventName)) return null
+      // Try each matching ABI item until one successfully decodes.
+      let event: { eventName: string; args: unknown } | undefined
+      let abiItem: { abi: AbiEvent; selector: Address } | undefined
 
-        // Check that the decoded event args match the provided args.
-        if (
-          !includesArgs({
-            args: event.args,
-            inputs: abiItem.inputs,
-            matchArgs: args,
+      for (const item of abiItems) {
+        try {
+          event = decodeEventLog({
+            ...formattedLog,
+            abi: [item.abi],
+            strict: true,
           })
-        )
-          return null
-
-        return { ...event, ...log }
-      } catch (err) {
-        let eventName: string | undefined
-        let isUnnamed: boolean | undefined
-
-        if (err instanceof AbiEventSignatureNotFoundError) return null
-        if (
-          err instanceof DecodeLogDataMismatch ||
-          err instanceof DecodeLogTopicsMismatch
-        ) {
-          // If strict mode is on, and log data/topics do not match event definition, skip.
-          if (strict) return null
-          eventName = err.abiItem.name
-          isUnnamed = err.abiItem.inputs?.some((x) => !('name' in x && x.name))
+          abiItem = item
+          break
+        } catch {
+          // Try next ABI item
         }
-
-        // Set args to empty if there is an error decoding (e.g. indexed/non-indexed params mismatch).
-        return { ...log, args: isUnnamed ? [] : {}, eventName }
       }
+
+      // If strict decoding failed for all, and we're in non-strict mode,
+      // fall back to the first matching ABI item.
+      if (!event && !strict) {
+        abiItem = abiItems[0]
+        try {
+          event = decodeEventLog({
+            data: formattedLog.data,
+            topics: formattedLog.topics,
+            abi: [abiItem.abi],
+            strict: false,
+          })
+        } catch {
+          // If decoding still fails, return partial log in non-strict mode.
+          const isUnnamed = abiItem.abi.inputs?.some(
+            (x) => !('name' in x && x.name),
+          )
+          return {
+            ...formattedLog,
+            args: isUnnamed ? [] : {},
+            eventName: abiItem.abi.name,
+          }
+        }
+      }
+
+      // If no event was found, return null.
+      if (!event || !abiItem) return null
+
+      // Check that the decoded event name matches the provided event name.
+      if (eventName && !eventName.includes(event.eventName)) return null
+
+      // Check that the decoded event args match the provided args.
+      if (
+        !includesArgs({
+          args: event.args,
+          inputs: abiItem.abi.inputs,
+          matchArgs: args,
+        })
+      )
+        return null
+
+      return { ...event, ...formattedLog }
     })
     .filter(Boolean) as unknown as ParseEventLogsReturnType<
     abi,
