@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@theme {
+  --color-chainlink-blue: #375BD2;
+  --color-chainlink-light: #5493F7;
+  --color-chainlink-dark: #1a1a2e;
+}
+
+:root {
+  --background: #0d0d1a;
+  --foreground: #e2e8f0;
+  --card: #1a1a2e;
+  --card-border: #2a2a3e;
+  --chainlink-blue: #375BD2;
+  --chainlink-light: #5493F7;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'Inter', system-ui, sans-serif;
+}
