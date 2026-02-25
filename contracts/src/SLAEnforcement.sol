@@ -12,16 +12,45 @@ interface AggregatorV3Interface {
     function decimals() external view returns (uint8);
 }
 
+/// @dev World ID router interface — verifies ZK proofs on-chain
+interface IWorldID {
+    function verifyProof(
+        uint256 root,
+        uint256 groupId,
+        uint256 signalHash,
+        uint256 nullifierHash,
+        uint256 externalNullifierHash,
+        uint256[8] calldata proof
+    ) external view;
+}
+
+/// @dev Utility to hash a signal address for World ID
+library ByteHasher {
+    function hashToField(bytes memory value) internal pure returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(value))) >> 8;
+    }
+}
+
 contract SLAEnforcement {
+    using ByteHasher for bytes;
+
+    // --- Chainlink ---
     AggregatorV3Interface public immutable priceFeed;
 
+    // --- World ID ---
+    IWorldID public immutable worldId;
+    uint256 public immutable groupId = 1; // 1 = Orb verified
+    uint256 public immutable providerExternalNullifier;
+    uint256 public immutable arbitratorExternalNullifier;
+
+    // --- Storage ---
     struct SLA {
         address provider;
         address tenant;
-        uint256 bondAmount;        // ETH bonded by provider
-        uint256 responseTimeHrs;   // max hours to respond
-        uint256 minUptimeBps;      // minimum uptime in basis points (9950 = 99.50%)
-        uint256 penaltyBps;        // penalty per breach in basis points
+        uint256 bondAmount;
+        uint256 responseTimeHrs;
+        uint256 minUptimeBps;  // e.g. 9950 = 99.50%
+        uint256 penaltyBps;    // e.g. 500 = 5%
         uint256 createdAt;
         bool active;
     }
@@ -38,33 +67,87 @@ contract SLAEnforcement {
     mapping(uint256 => Claim) public claims;
     mapping(address => bool) public verifiedProviders;
     mapping(address => bool) public verifiedArbitrators;
-    mapping(address => bytes32) public providerNullifiers;
+    mapping(uint256 => bool) public usedNullifiers; // prevent double-use of World ID proofs
 
     uint256 public slaCount;
     uint256 public claimCount;
 
-    uint256 public constant MIN_COLLATERAL_RATIO = 150; // 150%
-
-    event ProviderRegistered(address indexed provider, bytes32 nullifierHash);
+    // --- Events ---
+    event ProviderRegistered(address indexed provider, uint256 nullifierHash);
+    event ArbitratorRegistered(address indexed arbitrator, uint256 nullifierHash);
     event SLACreated(uint256 indexed slaId, address indexed provider, address indexed tenant);
     event ClaimFiled(uint256 indexed claimId, uint256 indexed slaId, address tenant);
     event SLABreached(uint256 indexed slaId, address indexed provider, uint256 uptimeBps, uint256 penaltyAmount);
     event ArbitrationDecision(uint256 indexed slaId, address indexed arbitrator, bool upheld);
 
-    constructor(address _priceFeed) {
+    constructor(
+        address _priceFeed,
+        address _worldId,
+        string memory _appId
+    ) {
         priceFeed = AggregatorV3Interface(_priceFeed);
+        worldId = IWorldID(_worldId);
+        // External nullifiers scope proofs to this app + action
+        providerExternalNullifier = abi.encodePacked(
+            abi.encodePacked(_appId).hashToField(), "oathkeeper-provider-register"
+        ).hashToField();
+        arbitratorExternalNullifier = abi.encodePacked(
+            abi.encodePacked(_appId).hashToField(), "oathkeeper-arbitrator-register"
+        ).hashToField();
     }
 
-    /// @notice Register as SLA provider (World ID verified off-chain, nullifier stored)
-    function registerProvider(bytes32 nullifierHash) external payable {
+    /// @notice Register as SLA provider — requires valid World ID ZK proof
+    /// @param root Merkle root from IDKit proof
+    /// @param nullifierHash Unique hash preventing double-registration
+    /// @param proof ZK proof from World ID
+    function registerProvider(
+        uint256 root,
+        uint256 nullifierHash,
+        uint256[8] calldata proof
+    ) external payable {
         require(!verifiedProviders[msg.sender], "Already registered");
+        require(!usedNullifiers[nullifierHash], "Nullifier already used");
         require(msg.value >= 0.1 ether, "Min bond 0.1 ETH");
+
+        // On-chain ZK proof verification — reverts if invalid
+        worldId.verifyProof(
+            root,
+            groupId,
+            abi.encodePacked(msg.sender).hashToField(),
+            nullifierHash,
+            providerExternalNullifier,
+            proof
+        );
+
         verifiedProviders[msg.sender] = true;
-        providerNullifiers[msg.sender] = nullifierHash;
+        usedNullifiers[nullifierHash] = true;
         emit ProviderRegistered(msg.sender, nullifierHash);
     }
 
-    /// @notice Create an SLA agreement
+    /// @notice Register as arbitrator — requires valid World ID ZK proof
+    function registerArbitrator(
+        uint256 root,
+        uint256 nullifierHash,
+        uint256[8] calldata proof
+    ) external {
+        require(!verifiedArbitrators[msg.sender], "Already registered");
+        require(!usedNullifiers[nullifierHash], "Nullifier already used");
+
+        worldId.verifyProof(
+            root,
+            groupId,
+            abi.encodePacked(msg.sender).hashToField(),
+            nullifierHash,
+            arbitratorExternalNullifier,
+            proof
+        );
+
+        verifiedArbitrators[msg.sender] = true;
+        usedNullifiers[nullifierHash] = true;
+        emit ArbitratorRegistered(msg.sender, nullifierHash);
+    }
+
+    /// @notice Create an SLA agreement (must be a verified provider)
     function createSLA(
         address tenant,
         uint256 responseTimeHrs,
@@ -108,7 +191,7 @@ contract SLAEnforcement {
         emit ClaimFiled(claimId, slaId, msg.sender);
     }
 
-    /// @notice CRE workflow calls this when SLA is breached
+    /// @notice CRE workflow calls this to slash bond on breach
     function recordBreach(
         uint256 slaId,
         uint256 uptimeBps,
@@ -130,25 +213,17 @@ contract SLAEnforcement {
         emit SLABreached(slaId, sla.provider, uptimeBps, penaltyAmount);
     }
 
-    /// @notice World ID verified arbitrator can override
+    /// @notice World ID verified arbitrator upholds or overturns a breach
     function arbitrate(uint256 slaId, bool upheld) external {
         require(verifiedArbitrators[msg.sender], "Not verified arbitrator");
         emit ArbitrationDecision(slaId, msg.sender, upheld);
     }
 
-    /// @notice Register as arbitrator (World ID verified)
-    function registerArbitrator(bytes32 nullifierHash) external {
-        verifiedArbitrators[msg.sender] = true;
-        providerNullifiers[msg.sender] = nullifierHash;
-        emit ProviderRegistered(msg.sender, nullifierHash);
-    }
-
-    /// @notice Get collateral value in USD using Chainlink price feed
+    /// @notice Get collateral USD value via Chainlink price feed
     function getCollateralRatio(uint256 slaId) public view returns (uint256) {
         SLA storage sla = slas[slaId];
         (, int256 price,,,) = priceFeed.latestRoundData();
-        uint256 ethPrice = uint256(price); // 8 decimals
-        uint256 collateralUsd = (sla.bondAmount * ethPrice) / 1e26; // normalize to 2 decimal places
-        return collateralUsd;
+        uint256 ethPrice = uint256(price);
+        return (sla.bondAmount * ethPrice) / 1e26;
     }
 }

@@ -11,47 +11,104 @@ contract MockAggregator {
     function decimals() external pure returns (uint8) { return 8; }
 }
 
+/// @dev Mock World ID that always accepts proofs — for unit testing only
+contract MockWorldID {
+    function verifyProof(
+        uint256, // root
+        uint256, // groupId
+        uint256, // signalHash
+        uint256, // nullifierHash
+        uint256, // externalNullifierHash
+        uint256[8] calldata // proof
+    ) external pure {
+        // Always succeeds in tests
+    }
+}
+
 contract SLAEnforcementTest is Test {
     SLAEnforcement slaContract;
     MockAggregator mockFeed;
+    MockWorldID mockWorldId;
+
     address provider = makeAddr("provider");
     address tenant = makeAddr("tenant");
     address arbitrator = makeAddr("arbitrator");
+
+    // Dummy ZK proof values (accepted by MockWorldID)
+    uint256 constant ROOT = 1;
+    uint256 constant NULLIFIER_PROVIDER = 100;
+    uint256 constant NULLIFIER_ARBITRATOR = 200;
+    uint256[8] proof; // zero proof, accepted by mock
 
     // Mirror event for vm.expectEmit
     event ArbitrationDecision(uint256 indexed slaId, address indexed arbitrator, bool upheld);
 
     function setUp() public {
         mockFeed = new MockAggregator();
-        slaContract = new SLAEnforcement(address(mockFeed));
+        mockWorldId = new MockWorldID();
+        slaContract = new SLAEnforcement(
+            address(mockFeed),
+            address(mockWorldId),
+            "app_test"
+        );
         vm.deal(provider, 10 ether);
         vm.deal(tenant, 1 ether);
     }
 
-    function test_registerProvider() public {
+    // --- Helper ---
+    function _registerProvider() internal {
         vm.prank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+        slaContract.registerProvider{value: 0.1 ether}(ROOT, NULLIFIER_PROVIDER, proof);
+    }
+
+    function _registerArbitrator() internal {
+        vm.prank(arbitrator);
+        slaContract.registerArbitrator(ROOT, NULLIFIER_ARBITRATOR, proof);
+    }
+
+    // --- Provider Registration ---
+
+    function test_registerProvider() public {
+        _registerProvider();
         assertTrue(slaContract.verifiedProviders(provider));
-        assertEq(slaContract.providerNullifiers(provider), bytes32(uint256(1)));
+        assertTrue(slaContract.usedNullifiers(NULLIFIER_PROVIDER));
     }
 
     function test_registerProviderMinBond() public {
         vm.prank(provider);
         vm.expectRevert("Min bond 0.1 ETH");
-        slaContract.registerProvider{value: 0.05 ether}(bytes32(uint256(1)));
+        slaContract.registerProvider{value: 0.05 ether}(ROOT, NULLIFIER_PROVIDER, proof);
     }
 
     function test_registerProviderDuplicate() public {
-        vm.startPrank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+        _registerProvider();
+        vm.prank(provider);
         vm.expectRevert("Already registered");
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(2)));
-        vm.stopPrank();
+        slaContract.registerProvider{value: 0.1 ether}(ROOT, 999, proof);
     }
 
+    function test_registerProviderNullifierReuse() public {
+        _registerProvider();
+        // Different address, same nullifier — should revert
+        address other = makeAddr("other");
+        vm.deal(other, 1 ether);
+        vm.prank(other);
+        vm.expectRevert("Nullifier already used");
+        slaContract.registerProvider{value: 0.1 ether}(ROOT, NULLIFIER_PROVIDER, proof);
+    }
+
+    // --- Arbitrator Registration ---
+
+    function test_registerArbitrator() public {
+        _registerArbitrator();
+        assertTrue(slaContract.verifiedArbitrators(arbitrator));
+        assertTrue(slaContract.usedNullifiers(NULLIFIER_ARBITRATOR));
+    }
+
+    // --- SLA Creation ---
+
     function test_createSLA() public {
-        vm.prank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+        _registerProvider();
 
         vm.prank(provider);
         uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
@@ -72,9 +129,10 @@ contract SLAEnforcementTest is Test {
         slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
     }
 
+    // --- Claims ---
+
     function test_fileClaim() public {
-        vm.prank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+        _registerProvider();
 
         vm.prank(provider);
         uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
@@ -82,7 +140,7 @@ contract SLAEnforcementTest is Test {
         vm.prank(tenant);
         slaContract.fileClaim(slaId, "Plumbing issue in unit 4B");
 
-        (uint256 sid, address t, string memory desc,,bool resolved) = slaContract.claims(0);
+        (uint256 sid, address t, string memory desc,, bool resolved) = slaContract.claims(0);
         assertEq(sid, slaId);
         assertEq(t, tenant);
         assertEq(desc, "Plumbing issue in unit 4B");
@@ -90,56 +148,51 @@ contract SLAEnforcementTest is Test {
     }
 
     function test_fileClaimNotTenant() public {
-        vm.prank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+        _registerProvider();
 
         vm.prank(provider);
         uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
 
-        vm.prank(provider); // Wrong caller
+        vm.prank(provider);
         vm.expectRevert("Not tenant");
         slaContract.fileClaim(slaId, "Fake claim");
     }
 
+    // --- Breach ---
+
     function test_recordBreach() public {
-        vm.prank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+        _registerProvider();
 
         vm.prank(provider);
         uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
 
         uint256 tenantBalBefore = tenant.balance;
-
-        // CRE calls recordBreach
-        slaContract.recordBreach(slaId, 9800, 500); // 5% penalty, 98% uptime
+        slaContract.recordBreach(slaId, 9800, 500); // 5% penalty
 
         (,, uint256 bondAfter,,,,, bool active) = slaContract.slas(slaId);
-        assertEq(bondAfter, 0.95 ether); // 5% slashed
-        assertEq(tenant.balance - tenantBalBefore, 0.05 ether); // 5% transferred
-        assertTrue(active); // Still active (bond > 0)
+        assertEq(bondAfter, 0.95 ether);
+        assertEq(tenant.balance - tenantBalBefore, 0.05 ether);
+        assertTrue(active);
     }
 
     function test_recordBreachDrainsFullBond() public {
-        vm.prank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+        _registerProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 10000); // 100% penalty
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 10000);
 
         slaContract.recordBreach(slaId, 9800, 10000);
 
         (,, uint256 bondAfter,,,,, bool active) = slaContract.slas(slaId);
         assertEq(bondAfter, 0);
-        assertFalse(active); // Deactivated when bond = 0
+        assertFalse(active);
     }
 
-    function test_arbitrate() public {
-        vm.prank(arbitrator);
-        slaContract.registerArbitrator(bytes32(uint256(99)));
-        assertTrue(slaContract.verifiedArbitrators(arbitrator));
+    // --- Arbitration ---
 
-        vm.prank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+    function test_arbitrate() public {
+        _registerArbitrator();
+        _registerProvider();
 
         vm.prank(provider);
         uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
@@ -157,15 +210,15 @@ contract SLAEnforcementTest is Test {
         slaContract.arbitrate(0, true);
     }
 
+    // --- Collateral ---
+
     function test_getCollateralRatio() public {
-        vm.prank(provider);
-        slaContract.registerProvider{value: 0.1 ether}(bytes32(uint256(1)));
+        _registerProvider();
 
         vm.prank(provider);
         uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
 
         uint256 ratio = slaContract.getCollateralRatio(slaId);
-        // 1 ETH * $2000 = $2000 USD (in 2 decimal form)
         assertGt(ratio, 0);
     }
 }
