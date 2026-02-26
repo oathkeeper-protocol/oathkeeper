@@ -10,7 +10,7 @@ contract DeployWorldChain is Script {
     // World ID Router on World Chain testnet (chain ID 4801)
     address constant WORLD_ID_ROUTER_WORLD_CHAIN_TESTNET = 0x57f928158C3EE7CDad1e4D8642503c4D0201f611;
 
-    string constant APP_ID = "app_staging_oathkeeper";
+    string constant APP_ID = "app_0e5ee3a703c09aeca78d2daca714943b";
 
     function run() external {
         address router = block.chainid == 480
