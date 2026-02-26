@@ -1,13 +1,22 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MiniKit, VerificationLevel, MiniAppVerifyActionPayload, ISuccessResult } from "@worldcoin/minikit-js";
+import {
+  MiniKit,
+  VerificationLevel,
+  ISuccessResult,
+  MiniAppSendTransactionPayload,
+} from "@worldcoin/minikit-js";
 import { motion, AnimatePresence } from "framer-motion";
+import { encodeFunctionData, parseAbi } from "viem";
 
 type Screen = "home" | "register" | "slas" | "claim";
 
-// World Chain Registry contract (deployed on World Chain)
-const REGISTRY_CONTRACT = process.env.NEXT_PUBLIC_REGISTRY_CONTRACT || "0x0000000000000000000000000000000000000000";
+const SLA_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_SLA_CONTRACT_ADDRESS || "0xB71247A5744b5c0e16a2b4374A34aCa8319703dB";
+
+const FILE_CLAIM_ABI = parseAbi([
+  "function fileClaim(uint256 slaId, string description) external",
+]);
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("home");
@@ -15,6 +24,8 @@ export default function App() {
   const [registering, setRegistering] = useState(false);
   const [registered, setRegistered] = useState(false);
   const [txStatus, setTxStatus] = useState<string | null>(null);
+  const [claimForm, setClaimForm] = useState({ slaId: "0", description: "" });
+  const [claimStatus, setClaimStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
 
   useEffect(() => {
     setIsInWorldApp(MiniKit.isInstalled());
@@ -29,10 +40,9 @@ export default function App() {
         throw new Error("Please open in World App");
       }
 
-      // Step 1: Get World ID proof via MiniKit
       const { finalPayload } = await MiniKit.commandsAsync.verify({
         action: "oathkeeper-provider-register",
-        signal: "", // optional additional data
+        signal: "",
         verification_level: VerificationLevel.Orb,
       });
 
@@ -42,7 +52,6 @@ export default function App() {
 
       const proof = finalPayload as ISuccessResult;
 
-      // Step 2: Server-side verify + relay to World Chain Registry
       const res = await fetch("/api/register-provider", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -57,12 +66,49 @@ export default function App() {
       if (!res.ok) throw new Error("Registration failed");
 
       const data = await res.json();
-      setTxStatus(`Registered! CRE will relay to Sepolia. Tx: ${data.txHash?.slice(0, 10)}...`);
+      setTxStatus(`Registered! CRE will relay to Sepolia. Tx: ${data.txHash?.slice(0, 12)}...`);
       setRegistered(true);
     } catch (err: unknown) {
       setTxStatus(`Error: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setRegistering(false);
+    }
+  };
+
+  const handleFileClaim = async () => {
+    if (!claimForm.description) return;
+    setClaimStatus("pending");
+
+    try {
+      if (!MiniKit.isInstalled()) {
+        // Outside World App — show error
+        throw new Error("Please open in World App to file claims");
+      }
+
+      const calldata = encodeFunctionData({
+        abi: FILE_CLAIM_ABI,
+        functionName: "fileClaim",
+        args: [BigInt(claimForm.slaId), claimForm.description],
+      });
+
+      const { finalPayload } = await MiniKit.commandsAsync.sendTransaction({
+        transaction: [
+          {
+            address: SLA_CONTRACT_ADDRESS,
+            abi: FILE_CLAIM_ABI,
+            functionName: "fileClaim",
+            args: [BigInt(claimForm.slaId), claimForm.description],
+          },
+        ],
+      });
+
+      const payload = finalPayload as MiniAppSendTransactionPayload;
+      if (payload.status === "error") throw new Error("Transaction rejected");
+
+      setClaimStatus("success");
+    } catch (err: unknown) {
+      console.error(err);
+      setClaimStatus("error");
     }
   };
 
@@ -79,7 +125,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Screen content */}
       <AnimatePresence mode="wait">
         {screen === "home" && (
           <motion.div
@@ -96,7 +141,6 @@ export default function App() {
               </p>
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-2 gap-3">
               {[
                 { label: "Active SLAs", value: "2", color: "text-blue-400" },
@@ -111,7 +155,6 @@ export default function App() {
               ))}
             </div>
 
-            {/* Actions */}
             <div className="space-y-3 pt-2">
               <button
                 onClick={() => setScreen("register")}
@@ -133,15 +176,14 @@ export default function App() {
               </button>
             </div>
 
-            {/* How it works */}
             <div className="bg-gray-900 rounded-2xl p-4 border border-gray-800 mt-4">
               <p className="text-xs font-semibold text-gray-400 mb-3">HOW IT WORKS</p>
               <div className="space-y-2">
                 {[
-                  { step: "1", text: "Verify identity with World ID" },
+                  { step: "1", text: "Verify identity with World ID (Orb)" },
                   { step: "2", text: "CRE relays your registration to Sepolia" },
                   { step: "3", text: "Bond ETH as SLA collateral" },
-                  { step: "4", text: "CRE auto-enforces breaches" },
+                  { step: "4", text: "CRE auto-enforces uptime breaches" },
                 ].map((item) => (
                   <div key={item.step} className="flex items-center gap-3">
                     <div className="w-5 h-5 rounded-full bg-blue-600/20 text-blue-400 text-xs flex items-center justify-center flex-shrink-0">
@@ -169,7 +211,6 @@ export default function App() {
               Verify with World ID on World Chain. Chainlink CRE will relay your registration to Sepolia automatically.
             </p>
 
-            {/* Flow diagram */}
             <div className="bg-gray-900 rounded-2xl p-4 border border-gray-800 mb-6">
               <div className="flex items-center gap-2 text-xs text-gray-400">
                 <span className="text-blue-400">World App</span>
@@ -249,28 +290,49 @@ export default function App() {
           >
             <button onClick={() => setScreen("home")} className="text-gray-400 text-sm mb-6">← Back</button>
             <h2 className="text-xl font-bold mb-2">File a Claim</h2>
-            <p className="text-gray-400 text-sm mb-6">Report a maintenance issue against your SLA agreement.</p>
-            <div className="space-y-4">
-              <div>
-                <label className="text-xs text-gray-400 mb-1 block">SLA ID</label>
-                <input
-                  type="number"
-                  defaultValue={0}
-                  className="w-full bg-gray-900 border border-gray-700 rounded-2xl px-4 py-3 text-white focus:outline-none"
-                />
+            <p className="text-gray-400 text-sm mb-6">
+              Report a maintenance issue. Your World App wallet signs the transaction directly.
+            </p>
+
+            {claimStatus === "success" ? (
+              <div className="bg-green-400/10 border border-green-400/20 rounded-2xl p-4">
+                <p className="text-green-400 font-semibold">✓ Claim filed on-chain!</p>
+                <p className="text-sm text-gray-400 mt-1">CRE will monitor provider response time and auto-enforce if breached.</p>
               </div>
-              <div>
-                <label className="text-xs text-gray-400 mb-1 block">Description</label>
-                <textarea
-                  rows={4}
-                  placeholder="Describe the issue..."
-                  className="w-full bg-gray-900 border border-gray-700 rounded-2xl px-4 py-3 text-white focus:outline-none resize-none"
-                />
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">SLA ID</label>
+                  <input
+                    type="number"
+                    value={claimForm.slaId}
+                    onChange={e => setClaimForm({ ...claimForm, slaId: e.target.value })}
+                    className="w-full bg-gray-900 border border-gray-700 rounded-2xl px-4 py-3 text-white focus:outline-none"
+                    min="0"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Description</label>
+                  <textarea
+                    rows={4}
+                    value={claimForm.description}
+                    onChange={e => setClaimForm({ ...claimForm, description: e.target.value })}
+                    placeholder="Describe the maintenance issue..."
+                    className="w-full bg-gray-900 border border-gray-700 rounded-2xl px-4 py-3 text-white focus:outline-none resize-none"
+                  />
+                </div>
+                <button
+                  onClick={handleFileClaim}
+                  disabled={claimStatus === "pending" || !claimForm.description}
+                  className="w-full bg-blue-600 disabled:opacity-50 text-white rounded-2xl py-4 font-semibold active:opacity-80"
+                >
+                  {claimStatus === "pending" ? "Submitting..." : "Submit Claim"}
+                </button>
+                {claimStatus === "error" && (
+                  <p className="text-red-400 text-sm">Failed to submit. Make sure you are in World App.</p>
+                )}
               </div>
-              <button className="w-full bg-blue-600 text-white rounded-2xl py-4 font-semibold active:opacity-80">
-                Submit Claim
-              </button>
-            </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

@@ -2,12 +2,16 @@ import { NextRequest } from "next/server";
 import { createWalletClient, http, parseAbi, getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-// World Chain mainnet
+// World Chain — uses Tenderly VNet if configured, falls back to public testnet
+const rpcUrl =
+  process.env.NEXT_PUBLIC_WORLD_CHAIN_RPC ||
+  "https://worldchain-sepolia.g.alchemy.com/public";
+
 const worldChain = {
-  id: 480,
-  name: "World Chain",
+  id: parseInt(process.env.NEXT_PUBLIC_WORLD_CHAIN_ID || "4801"),
+  name: "World Chain Sepolia",
   nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-  rpcUrls: { default: { http: ["https://worldchain-mainnet.g.alchemy.com/public"] } },
+  rpcUrls: { default: { http: [rpcUrl] } },
 };
 
 const REGISTRY_ABI = parseAbi([
@@ -37,10 +41,11 @@ export async function POST(req: NextRequest) {
   }
 
   // Step 2: Submit to WorldChainRegistry contract
-  const privateKey = process.env.RELAYER_PRIVATE_KEY as `0x${string}`;
-  if (!privateKey) {
+  const rawKey = process.env.RELAYER_PRIVATE_KEY;
+  if (!rawKey) {
     return Response.json({ error: "Relayer not configured" }, { status: 500 });
   }
+  const privateKey = (rawKey.startsWith("0x") ? rawKey : `0x${rawKey}`) as `0x${string}`;
 
   const account = privateKeyToAccount(privateKey);
   const walletClient = createWalletClient({ account, chain: worldChain, transport: http() });
