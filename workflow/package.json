@@ -1,7 +1,7 @@
 {
-  "name": "oathkeeper-workflow",
+  "name": "oathlayer-workflow",
   "version": "1.0.0",
-  "description": "Chainlink CRE workflow for OathKeeper SLA enforcement",
+  "description": "Chainlink CRE workflow for OathLayer SLA enforcement",
   "main": "workflow.ts",
   "scripts": {
     "simulate": "cre workflow simulate --verbose",

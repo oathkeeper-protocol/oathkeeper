@@ -1,5 +1,5 @@
 // mock-api/server.ts
-// Mock provider uptime API for OathKeeper demo
+// Mock provider uptime API for OathLayer demo
 // Allows controlling uptime % to trigger/clear breaches during demo
 
 import express, { Request, Response } from 'express';
@@ -75,7 +75,7 @@ app.post('/reset', (_req: Request, res: Response) => {
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`[MockAPI] OathKeeper mock uptime API running on :${PORT}`);
+  console.log(`[MockAPI] OathLayer mock uptime API running on :${PORT}`);
   console.log(`[MockAPI] Set breach: POST /set-uptime {"uptime": 98.0}`);
   console.log(`[MockAPI] Check status: GET /status`);
 });

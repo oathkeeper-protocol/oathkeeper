@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
       merkle_root,
       nullifier_hash,
       verification_level: body.verification_level,
-      action: "oathkeeper-provider-register",
+      action: "oathlayer-provider-register",
     }),
   });
 

@@ -41,7 +41,7 @@ export default function App() {
       }
 
       const { finalPayload } = await MiniKit.commandsAsync.verify({
-        action: "oathkeeper-provider-register",
+        action: "oathlayer-provider-register",
         signal: "",
         verification_level: VerificationLevel.Orb,
       });
@@ -118,7 +118,7 @@ export default function App() {
       <div className="px-5 pt-12 pb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold">OK</div>
-          <span className="font-semibold text-lg">OathKeeper</span>
+          <span className="font-semibold text-lg">OathLayer</span>
         </div>
         {isInWorldApp && (
           <span className="text-xs text-green-400 bg-green-400/10 px-2 py-1 rounded-full">World App</span>

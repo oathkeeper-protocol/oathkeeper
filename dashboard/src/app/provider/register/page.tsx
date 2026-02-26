@@ -21,7 +21,7 @@ export default function RegisterProvider() {
     const res = await fetch("/api/verify-worldid", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...result, action: "oathkeeper-provider-register" }),
+      body: JSON.stringify({ ...result, action: "oathlayer-provider-register" }),
     });
     if (!res.ok) throw new Error("World ID verification failed");
     setProof(result);
@@ -82,8 +82,8 @@ export default function RegisterProvider() {
             </div>
           ) : (
             <IDKitWidget
-              app_id={(process.env.NEXT_PUBLIC_WLD_APP_ID || "app_staging_oathkeeper") as `app_${string}`}
-              action="oathkeeper-provider-register"
+              app_id={(process.env.NEXT_PUBLIC_WLD_APP_ID || "app_staging_oathlayer") as `app_${string}`}
+              action="oathlayer-provider-register"
               signal={address}
               verification_level={VerificationLevel.Device}
               handleVerify={handleVerify}

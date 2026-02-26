@@ -111,7 +111,7 @@ export default function Arbitrate() {
     const res = await fetch("/api/verify-worldid", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...result, action: "oathkeeper-arbitrator-register" }),
+      body: JSON.stringify({ ...result, action: "oathlayer-arbitrator-register" }),
     });
     if (!res.ok) throw new Error("Verification failed");
     setProof(result);
@@ -159,8 +159,8 @@ export default function Arbitrate() {
 
         {!proof ? (
           <IDKitWidget
-            app_id={(process.env.NEXT_PUBLIC_WLD_APP_ID || "app_staging_oathkeeper") as `app_${string}`}
-            action="oathkeeper-arbitrator-register"
+            app_id={(process.env.NEXT_PUBLIC_WLD_APP_ID || "app_staging_oathlayer") as `app_${string}`}
+            action="oathlayer-arbitrator-register"
             signal={address}
             verification_level={VerificationLevel.Device}
             handleVerify={handleVerify}

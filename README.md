@@ -1,4 +1,4 @@
-# OathKeeper
+# OathLayer
 
 On-chain SLA enforcement for tokenized real-world assets. If a property manager misses maintenance deadlines or uptime thresholds, Chainlink CRE auto-detects the breach and triggers penalty payments from their bonded collateral. World ID ensures only verified humans can be SLA providers or arbitrators.
 
@@ -50,7 +50,7 @@ graph TD
 ## Project Structure
 
 ```
-oathkeeper/
+oathlayer/
 ├── contracts/          # Foundry smart contracts
 │   ├── src/
 │   │   └── SLAEnforcement.sol

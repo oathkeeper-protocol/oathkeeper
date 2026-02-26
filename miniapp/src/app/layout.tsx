@@ -3,7 +3,7 @@ import "./globals.css";
 import { MiniKitProvider } from "./providers";
 
 export const metadata: Metadata = {
-  title: "OathKeeper",
+  title: "OathLayer",
   description: "On-chain SLA enforcement — World App Mini App",
 };
 

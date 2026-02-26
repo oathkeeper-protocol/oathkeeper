@@ -4,7 +4,7 @@ import { Providers } from "@/components/Providers";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 
 export const metadata: Metadata = {
-  title: "OathKeeper — On-Chain SLA Enforcement",
+  title: "OathLayer — On-Chain SLA Enforcement",
   description: "Automated SLA enforcement for tokenized real-world assets, powered by Chainlink CRE and World ID",
 };
 
@@ -17,9 +17,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="max-w-7xl mx-auto flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: 'var(--chainlink-blue)' }}>
-                  <span className="text-white font-bold text-sm">OK</span>
+                  <span className="text-white font-bold text-sm">OL</span>
                 </div>
-                <span className="font-bold text-lg text-white">OathKeeper</span>
+                <span className="font-bold text-lg text-white">OathLayer</span>
                 <span className="text-xs px-2 py-0.5 rounded-full text-white" style={{ background: 'var(--chainlink-blue)' }}>
                   Powered by Chainlink CRE
                 </span>

@@ -1,4 +1,4 @@
-// OathKeeper — Chainlink CRE Workflow
+// OathLayer — Chainlink CRE Workflow
 // Monitors SLA compliance for tokenized real-world assets
 // Triggers: Cron (every 15 min) + EVM Log (ClaimFiled event)
 //           + EVM Log (ProviderRegistrationRequested on World Chain)
@@ -202,7 +202,7 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number } {
   const apiKey = runtime.getSecret({ id: "UPTIME_API_KEY" }).result().value || "demo-key";
 
   const slaCount = readSlaCount(runtime, evmClient, contractAddress);
-  runtime.log(`[OathKeeper] Checking ${slaCount} SLAs`);
+  runtime.log(`[OathLayer] Checking ${slaCount} SLAs`);
 
   let breachCount = 0;
 
@@ -234,16 +234,16 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number } {
     const uptimeBps = Math.round(uptimeData.uptimePercent * 100);
     const minUptimeBps = Number(sla.minUptimeBps);
 
-    runtime.log(`[OathKeeper] SLA ${i}: ${uptimeBps} bps (min: ${minUptimeBps})`);
+    runtime.log(`[OathLayer] SLA ${i}: ${uptimeBps} bps (min: ${minUptimeBps})`);
 
     if (uptimeBps < minUptimeBps) {
-      runtime.log(`[OathKeeper] BREACH SLA ${i}: ${uptimeBps} < ${minUptimeBps} — slashing bond`);
+      runtime.log(`[OathLayer] BREACH SLA ${i}: ${uptimeBps} < ${minUptimeBps} — slashing bond`);
       writeBreach(runtime, evmClient, contractAddress, i, uptimeBps, sla.penaltyBps);
       breachCount++;
     }
   }
 
-  runtime.log(`[OathKeeper] Done. Breaches: ${breachCount}`);
+  runtime.log(`[OathLayer] Done. Breaches: ${breachCount}`);
   return { breachCount };
 }
 
@@ -288,12 +288,12 @@ function relayRegistration(
 // --- Handlers ---
 
 const onCronTrigger = (runtime: Runtime<Config>) => {
-  runtime.log("[OathKeeper] Cron triggered — scanning all SLAs");
+  runtime.log("[OathLayer] Cron triggered — scanning all SLAs");
   return scanSLAs(runtime);
 };
 
 const onClaimFiled = (runtime: Runtime<Config>) => {
-  runtime.log("[OathKeeper] ClaimFiled event — immediate compliance scan");
+  runtime.log("[OathLayer] ClaimFiled event — immediate compliance scan");
   return scanSLAs(runtime);
 };
 
@@ -305,7 +305,7 @@ const onClaimFiled = (runtime: Runtime<Config>) => {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const onProviderRegistrationRequested = (runtime: Runtime<Config>, log: any) => {
-  runtime.log("[OathKeeper] ProviderRegistrationRequested on World Chain — relaying to Sepolia");
+  runtime.log("[OathLayer] ProviderRegistrationRequested on World Chain — relaying to Sepolia");
 
   // topics[0] = event signature hash (already filtered by trigger)
   // topics[1] = user (indexed address, left-padded to 32 bytes)
@@ -324,12 +324,12 @@ const onProviderRegistrationRequested = (runtime: Runtime<Config>, log: any) => 
   const root = decoded[0];
 
   runtime.log(
-    `[OathKeeper] Relaying provider registration: user=${userAddress} nullifier=${nullifierHash} root=${root}`
+    `[OathLayer] Relaying provider registration: user=${userAddress} nullifier=${nullifierHash} root=${root}`
   );
 
   relayRegistration(runtime, "registerProviderRelayed", userAddress, nullifierHash);
 
-  runtime.log(`[OathKeeper] Provider registration relayed to Sepolia for ${userAddress}`);
+  runtime.log(`[OathLayer] Provider registration relayed to Sepolia for ${userAddress}`);
   return { relayed: true, role: "provider", user: userAddress };
 };
 
@@ -341,7 +341,7 @@ const onProviderRegistrationRequested = (runtime: Runtime<Config>, log: any) => 
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const onArbitratorRegistrationRequested = (runtime: Runtime<Config>, log: any) => {
-  runtime.log("[OathKeeper] ArbitratorRegistrationRequested on World Chain — relaying to Sepolia");
+  runtime.log("[OathLayer] ArbitratorRegistrationRequested on World Chain — relaying to Sepolia");
 
   const userAddress = `0x${(log.topics[1] as string).slice(26)}` as Address;
   const nullifierHash = BigInt(log.topics[2] as string);
@@ -356,12 +356,12 @@ const onArbitratorRegistrationRequested = (runtime: Runtime<Config>, log: any) =
   const root = decoded[0];
 
   runtime.log(
-    `[OathKeeper] Relaying arbitrator registration: user=${userAddress} nullifier=${nullifierHash} root=${root}`
+    `[OathLayer] Relaying arbitrator registration: user=${userAddress} nullifier=${nullifierHash} root=${root}`
   );
 
   relayRegistration(runtime, "registerArbitratorRelayed", userAddress, nullifierHash);
 
-  runtime.log(`[OathKeeper] Arbitrator registration relayed to Sepolia for ${userAddress}`);
+  runtime.log(`[OathLayer] Arbitrator registration relayed to Sepolia for ${userAddress}`);
   return { relayed: true, role: "arbitrator", user: userAddress };
 };
 

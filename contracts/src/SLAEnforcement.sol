@@ -96,10 +96,10 @@ contract SLAEnforcement {
         worldId = IWorldID(_worldId);
         // External nullifiers scope proofs to this app + action
         providerExternalNullifier = abi.encodePacked(
-            abi.encodePacked(_appId).hashToField(), "oathkeeper-provider-register"
+            abi.encodePacked(_appId).hashToField(), "oathlayer-provider-register"
         ).hashToField();
         arbitratorExternalNullifier = abi.encodePacked(
-            abi.encodePacked(_appId).hashToField(), "oathkeeper-arbitrator-register"
+            abi.encodePacked(_appId).hashToField(), "oathlayer-arbitrator-register"
         ).hashToField();
         // For hackathon: deployer address is acceptable as initial CRE forwarder
         creForwarder = _creForwarder;

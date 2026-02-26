@@ -27,8 +27,8 @@ export const tenderlyVNet = defineChain({
 });
 
 export const config = getDefaultConfig({
-  appName: "OathKeeper",
-  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "oathkeeper-hackathon",
+  appName: "OathLayer",
+  projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "oathlayer-hackathon",
   chains: [tenderlyVNet, sepolia],
   ssr: true,
 });

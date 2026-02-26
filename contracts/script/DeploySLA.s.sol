@@ -13,7 +13,7 @@ contract DeploySLA is Script {
     address constant WORLD_ID_ROUTER = 0x469449f251692E0779667583026b5A1E99512157;
 
     // Your World ID app ID from developer.world.org
-    string constant APP_ID = "app_staging_oathkeeper";
+    string constant APP_ID = "app_staging_oathlayer";
 
     // CRE DON forwarder address on Sepolia — set to deployer for hackathon,
     // replace with the actual CRE forwarder contract address post-deployment

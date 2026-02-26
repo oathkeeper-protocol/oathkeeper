@@ -20,7 +20,7 @@ library ByteHasher {
 }
 
 /// @title WorldChainRegistry
-/// @notice Entry point on World Chain for OathKeeper SLA providers and arbitrators.
+/// @notice Entry point on World Chain for OathLayer SLA providers and arbitrators.
 ///         Users verify with World ID here, then CRE relays their registration to Sepolia.
 contract WorldChainRegistry {
     using ByteHasher for bytes;
@@ -57,11 +57,11 @@ contract WorldChainRegistry {
         worldId = IWorldID(_worldId);
         providerExternalNullifier = abi.encodePacked(
             abi.encodePacked(_appId).hashToField(),
-            "oathkeeper-provider-register"
+            "oathlayer-provider-register"
         ).hashToField();
         arbitratorExternalNullifier = abi.encodePacked(
             abi.encodePacked(_appId).hashToField(),
-            "oathkeeper-arbitrator-register"
+            "oathlayer-arbitrator-register"
         ).hashToField();
     }
 
