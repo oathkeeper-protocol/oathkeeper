@@ -43,6 +43,12 @@ contract SLAEnforcement {
     uint256 public immutable providerExternalNullifier;
     uint256 public immutable arbitratorExternalNullifier;
 
+    // --- CRE Cross-chain Forwarder ---
+    /// @notice Address of the Chainlink CRE DON forwarder contract.
+    ///         Set at deploy time; this is the only address allowed to call
+    ///         registerProviderRelayed / registerArbitratorRelayed.
+    address public creForwarder;
+
     // --- Storage ---
     struct SLA {
         address provider;
@@ -83,7 +89,8 @@ contract SLAEnforcement {
     constructor(
         address _priceFeed,
         address _worldId,
-        string memory _appId
+        string memory _appId,
+        address _creForwarder
     ) {
         priceFeed = AggregatorV3Interface(_priceFeed);
         worldId = IWorldID(_worldId);
@@ -94,6 +101,8 @@ contract SLAEnforcement {
         arbitratorExternalNullifier = abi.encodePacked(
             abi.encodePacked(_appId).hashToField(), "oathkeeper-arbitrator-register"
         ).hashToField();
+        // For hackathon: deployer address is acceptable as initial CRE forwarder
+        creForwarder = _creForwarder;
     }
 
     /// @notice Register as SLA provider — requires valid World ID ZK proof
@@ -145,6 +154,35 @@ contract SLAEnforcement {
         verifiedArbitrators[msg.sender] = true;
         usedNullifiers[nullifierHash] = true;
         emit ArbitratorRegistered(msg.sender, nullifierHash);
+    }
+
+    /// @notice Called by the CRE DON forwarder to register a provider whose World ID
+    ///         proof was already verified on World Chain. Skips local ZK verification
+    ///         because the CRE DON is the trusted bridge between chains.
+    /// @param user  The wallet address that was verified on World Chain
+    /// @param nullifierHash Unique nullifier from the World ID proof (prevents reuse)
+    function registerProviderRelayed(address user, uint256 nullifierHash) external {
+        require(msg.sender == creForwarder, "Not CRE forwarder");
+        require(!verifiedProviders[user], "Already registered");
+        require(!usedNullifiers[nullifierHash], "Nullifier already used");
+
+        verifiedProviders[user] = true;
+        usedNullifiers[nullifierHash] = true;
+        emit ProviderRegistered(user, nullifierHash);
+    }
+
+    /// @notice Called by the CRE DON forwarder to register an arbitrator whose World ID
+    ///         proof was already verified on World Chain.
+    /// @param user  The wallet address that was verified on World Chain
+    /// @param nullifierHash Unique nullifier from the World ID proof (prevents reuse)
+    function registerArbitratorRelayed(address user, uint256 nullifierHash) external {
+        require(msg.sender == creForwarder, "Not CRE forwarder");
+        require(!verifiedArbitrators[user], "Already registered");
+        require(!usedNullifiers[nullifierHash], "Nullifier already used");
+
+        verifiedArbitrators[user] = true;
+        usedNullifiers[nullifierHash] = true;
+        emit ArbitratorRegistered(user, nullifierHash);
     }
 
     /// @notice Create an SLA agreement (must be a verified provider)

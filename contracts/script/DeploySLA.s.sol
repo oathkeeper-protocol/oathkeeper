@@ -15,12 +15,18 @@ contract DeploySLA is Script {
     // Your World ID app ID from developer.world.org
     string constant APP_ID = "app_staging_oathkeeper";
 
+    // CRE DON forwarder address on Sepolia — set to deployer for hackathon,
+    // replace with the actual CRE forwarder contract address post-deployment
+    address constant CRE_FORWARDER = 0x0000000000000000000000000000000000000000;
+
     function run() external {
         vm.startBroadcast();
+        address forwarder = CRE_FORWARDER == address(0) ? msg.sender : CRE_FORWARDER;
         SLAEnforcement sla = new SLAEnforcement(
             ETH_USD_FEED,
             WORLD_ID_ROUTER,
-            APP_ID
+            APP_ID,
+            forwarder
         );
         console.log("SLAEnforcement deployed at:", address(sla));
         console.log("World ID Router:", WORLD_ID_ROUTER);

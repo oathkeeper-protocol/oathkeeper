@@ -1,7 +1,10 @@
 // OathKeeper — Chainlink CRE Workflow
 // Monitors SLA compliance for tokenized real-world assets
 // Triggers: Cron (every 15 min) + EVM Log (ClaimFiled event)
+//           + EVM Log (ProviderRegistrationRequested on World Chain)
+//           + EVM Log (ArbitratorRegistrationRequested on World Chain)
 // Actions: fetch uptime → detect breach → write recordBreach() on-chain
+//          relay World ID verifications from World Chain → Sepolia
 
 import {
   cre,
@@ -19,6 +22,7 @@ import {
 import {
   encodeFunctionData,
   decodeFunctionResult,
+  decodeAbiParameters,
   keccak256,
   toBytes,
   toHex,
@@ -30,9 +34,12 @@ import { z } from "zod";
 
 // --- Config schema (injected by CRE runtime) ---
 const configSchema = z.object({
-  slaContractAddress: z.string().describe("Deployed SLAEnforcement contract address"),
+  slaContractAddress: z.string().describe("Deployed SLAEnforcement contract address on Sepolia"),
   uptimeApiUrl: z.string().describe("Base URL for uptime API"),
   chainSelectorName: z.string(),
+  worldChainContractAddress: z.string().describe("WorldChainRegistry address on World Chain"),
+  // World Chain mainnet CCIP chain selector (from Chainlink docs: 11820315825706515952)
+  worldChainSelector: z.string().describe("CCIP chain selector for World Chain mainnet (default: 11820315825706515952)"),
 });
 
 type Config = z.infer<typeof configSchema>;
@@ -69,6 +76,30 @@ const SLA_ABI = [
       { internalType: "uint256", name: "penaltyBps", type: "uint256" },
     ],
     name: "recordBreach",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+] as const;
+
+// --- Relay ABI — new forwarder functions on SLAEnforcement (Sepolia) ---
+const RELAY_ABI = [
+  {
+    inputs: [
+      { internalType: "address", name: "user", type: "address" },
+      { internalType: "uint256", name: "nullifierHash", type: "uint256" },
+    ],
+    name: "registerProviderRelayed",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { internalType: "address", name: "user", type: "address" },
+      { internalType: "uint256", name: "nullifierHash", type: "uint256" },
+    ],
+    name: "registerArbitratorRelayed",
     outputs: [],
     stateMutability: "nonpayable",
     type: "function",
@@ -216,6 +247,44 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number } {
   return { breachCount };
 }
 
+// --- Cross-chain relay helpers ---
+
+/**
+ * Relay a World ID registration from World Chain to Sepolia's SLAEnforcement.
+ * The ZK proof was already verified by WorldChainRegistry on World Chain;
+ * the CRE DON acts as a trusted forwarder so Sepolia skips re-verification.
+ */
+function relayRegistration(
+  runtime: Runtime<Config>,
+  functionName: "registerProviderRelayed" | "registerArbitratorRelayed",
+  userAddress: Address,
+  nullifierHash: bigint
+): void {
+  const config = runtime.config;
+  const contractAddress = getAddress(config.slaContractAddress) as Address;
+
+  const sepoliaNetwork = getNetwork({
+    chainFamily: "evm",
+    chainSelectorName: "ethereum-testnet-sepolia",
+    isTestnet: true,
+  });
+  if (!sepoliaNetwork) throw new Error("Sepolia network not found in CRE registry");
+
+  const sepoliaClient = new cre.capabilities.EVMClient(sepoliaNetwork.chainSelector.selector);
+
+  const callData = encodeFunctionData({
+    abi: RELAY_ABI,
+    functionName,
+    args: [userAddress, nullifierHash],
+  });
+
+  const report = runtime.report(prepareReportRequest(callData)).result();
+  sepoliaClient.writeReport(runtime, {
+    receiver: toHex(toBytes(contractAddress, { size: 20 })),
+    report,
+  }).result();
+}
+
 // --- Handlers ---
 
 const onCronTrigger = (runtime: Runtime<Config>) => {
@@ -228,6 +297,74 @@ const onClaimFiled = (runtime: Runtime<Config>) => {
   return scanSLAs(runtime);
 };
 
+/**
+ * Triggered when WorldChainRegistry emits:
+ *   ProviderRegistrationRequested(address indexed user, uint256 indexed nullifierHash, uint256 root, uint256 timestamp)
+ *
+ * Decodes the log and relays the registration to Sepolia via the trusted forwarder pattern.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const onProviderRegistrationRequested = (runtime: Runtime<Config>, log: any) => {
+  runtime.log("[OathKeeper] ProviderRegistrationRequested on World Chain — relaying to Sepolia");
+
+  // topics[0] = event signature hash (already filtered by trigger)
+  // topics[1] = user (indexed address, left-padded to 32 bytes)
+  // topics[2] = nullifierHash (indexed uint256)
+  // data      = abi-encoded (root uint256, timestamp uint256)
+  const userAddress = `0x${(log.topics[1] as string).slice(26)}` as Address;
+  const nullifierHash = BigInt(log.topics[2] as string);
+
+  const decoded = decodeAbiParameters(
+    [
+      { name: "root", type: "uint256" },
+      { name: "timestamp", type: "uint256" },
+    ],
+    log.data as `0x${string}`
+  );
+  const root = decoded[0];
+
+  runtime.log(
+    `[OathKeeper] Relaying provider registration: user=${userAddress} nullifier=${nullifierHash} root=${root}`
+  );
+
+  relayRegistration(runtime, "registerProviderRelayed", userAddress, nullifierHash);
+
+  runtime.log(`[OathKeeper] Provider registration relayed to Sepolia for ${userAddress}`);
+  return { relayed: true, role: "provider", user: userAddress };
+};
+
+/**
+ * Triggered when WorldChainRegistry emits:
+ *   ArbitratorRegistrationRequested(address indexed user, uint256 indexed nullifierHash, uint256 root, uint256 timestamp)
+ *
+ * Decodes the log and relays the registration to Sepolia via the trusted forwarder pattern.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const onArbitratorRegistrationRequested = (runtime: Runtime<Config>, log: any) => {
+  runtime.log("[OathKeeper] ArbitratorRegistrationRequested on World Chain — relaying to Sepolia");
+
+  const userAddress = `0x${(log.topics[1] as string).slice(26)}` as Address;
+  const nullifierHash = BigInt(log.topics[2] as string);
+
+  const decoded = decodeAbiParameters(
+    [
+      { name: "root", type: "uint256" },
+      { name: "timestamp", type: "uint256" },
+    ],
+    log.data as `0x${string}`
+  );
+  const root = decoded[0];
+
+  runtime.log(
+    `[OathKeeper] Relaying arbitrator registration: user=${userAddress} nullifier=${nullifierHash} root=${root}`
+  );
+
+  relayRegistration(runtime, "registerArbitratorRelayed", userAddress, nullifierHash);
+
+  runtime.log(`[OathKeeper] Arbitrator registration relayed to Sepolia for ${userAddress}`);
+  return { relayed: true, role: "arbitrator", user: userAddress };
+};
+
 // --- Workflow init ---
 const initWorkflow = (config: Config) => {
   const network = getNetwork({
@@ -238,6 +375,11 @@ const initWorkflow = (config: Config) => {
   if (!network) throw new Error(`Unknown chain: ${config.chainSelectorName}`);
   const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
   const contractAddress = getAddress(config.slaContractAddress) as Address;
+
+  // World Chain EVMClient — uses chain selector from config (operator-set at deployment)
+  const worldChainSelector = BigInt(config.worldChainSelector);
+  const worldChainClient = new cre.capabilities.EVMClient(worldChainSelector);
+  const worldChainContractAddress = getAddress(config.worldChainContractAddress) as Address;
 
   // Cron: every 15 minutes
   const cron = new cre.capabilities.CronCapability();
@@ -255,9 +397,39 @@ const initWorkflow = (config: Config) => {
     ],
   });
 
+  // World Chain EVM Log: ProviderRegistrationRequested(address indexed user, uint256 indexed nullifierHash, uint256 root, uint256 timestamp)
+  const providerRegistrationTopic = keccak256(
+    toBytes("ProviderRegistrationRequested(address,uint256,uint256,uint256)")
+  );
+  const providerRegistrationTrigger = worldChainClient.logTrigger({
+    addresses: [toHex(toBytes(worldChainContractAddress, { size: 20 }))],
+    topics: [
+      { values: [providerRegistrationTopic] },
+      { values: [] }, // user (indexed)
+      { values: [] }, // nullifierHash (indexed)
+      { values: [] },
+    ],
+  });
+
+  // World Chain EVM Log: ArbitratorRegistrationRequested(address indexed user, uint256 indexed nullifierHash, uint256 root, uint256 timestamp)
+  const arbitratorRegistrationTopic = keccak256(
+    toBytes("ArbitratorRegistrationRequested(address,uint256,uint256,uint256)")
+  );
+  const arbitratorRegistrationTrigger = worldChainClient.logTrigger({
+    addresses: [toHex(toBytes(worldChainContractAddress, { size: 20 }))],
+    topics: [
+      { values: [arbitratorRegistrationTopic] },
+      { values: [] }, // user (indexed)
+      { values: [] }, // nullifierHash (indexed)
+      { values: [] },
+    ],
+  });
+
   return [
     cre.handler(cronTrigger, onCronTrigger),
     cre.handler(logTrigger, onClaimFiled),
+    cre.handler(providerRegistrationTrigger, onProviderRegistrationRequested),
+    cre.handler(arbitratorRegistrationTrigger, onArbitratorRegistrationRequested),
   ];
 };
 

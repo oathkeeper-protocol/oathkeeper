@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: #000;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+  overscroll-behavior: none;
+}

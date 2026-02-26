@@ -33,6 +33,7 @@ contract SLAEnforcementTest is Test {
     address provider = makeAddr("provider");
     address tenant = makeAddr("tenant");
     address arbitrator = makeAddr("arbitrator");
+    address creForwarder = makeAddr("creForwarder");
 
     // Dummy ZK proof values (accepted by MockWorldID)
     uint256 constant ROOT = 1;
@@ -49,7 +50,8 @@ contract SLAEnforcementTest is Test {
         slaContract = new SLAEnforcement(
             address(mockFeed),
             address(mockWorldId),
-            "app_test"
+            "app_test",
+            creForwarder
         );
         vm.deal(provider, 10 ether);
         vm.deal(tenant, 1 ether);
