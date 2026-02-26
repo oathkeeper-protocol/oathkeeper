@@ -2,22 +2,36 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-
-const MOCK_CLAIMS = [
-  { id: 0, slaId: 0, description: "Plumbing leak in unit 4B — no response in 72hrs", filedAt: "2026-02-24T14:30:00Z", resolved: false },
-  { id: 1, slaId: 1, description: "HVAC failure — maintenance required", filedAt: "2026-02-25T09:00:00Z", resolved: true },
-];
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract } from "wagmi";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { SLA_CONTRACT_ADDRESS, SLA_ABI, MOCK_BREACHES } from "@/lib/contract";
 
 export default function Claims() {
+  const { address, isConnected } = useAccount();
   const [form, setForm] = useState({ slaId: "0", description: "" });
-  const [txStatus, setTxStatus] = useState<"idle" | "pending" | "success">("idle");
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const { writeContract, data: txHash, isPending, error, reset } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+
+  // Read total claim count to know how many to fetch
+  const { data: claimCount } = useReadContract({
+    address: SLA_CONTRACT_ADDRESS,
+    abi: SLA_ABI,
+    functionName: "claimCount",
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setTxStatus("pending");
-    await new Promise(r => setTimeout(r, 1500));
-    setTxStatus("success");
+    reset();
+    writeContract({
+      address: SLA_CONTRACT_ADDRESS,
+      abi: SLA_ABI,
+      functionName: "fileClaim",
+      args: [BigInt(form.slaId), form.description],
+    });
   };
+
+  const isLoading = isPending || isConfirming;
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
@@ -28,8 +42,11 @@ export default function Claims() {
 
       {/* File new claim */}
       <div className="rounded-xl p-6 border" style={{ background: 'var(--card)', borderColor: 'var(--card-border)' }}>
-        <h2 className="text-lg font-semibold text-white mb-4">File a Claim</h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-white">File a Claim</h2>
+          {!isConnected && <ConnectButton />}
+        </div>
+        <form onSubmit={handleSubmit} className={`space-y-4 ${!isConnected ? 'opacity-50 pointer-events-none' : ''}`}>
           <div>
             <label className="block text-sm text-gray-400 mb-1">SLA ID</label>
             <input
@@ -55,27 +72,53 @@ export default function Claims() {
           </div>
           <button
             type="submit"
-            disabled={txStatus === "pending"}
+            disabled={!isConnected || isLoading}
             className="px-6 py-2 rounded-lg font-medium text-white disabled:opacity-50 transition-opacity hover:opacity-90"
             style={{ background: 'var(--chainlink-blue)' }}
           >
-            {txStatus === "pending" ? "Submitting..." : "File Claim"}
+            {isLoading ? "Submitting..." : "File Claim"}
           </button>
-          {txStatus === "success" && (
+
+          {txHash && !isSuccess && (
+            <p className="text-xs text-gray-400 font-mono">
+              Tx: {txHash.slice(0, 20)}... confirming...
+            </p>
+          )}
+
+          {isSuccess && (
             <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-green-400 text-sm">
-              Claim filed. CRE will monitor provider response time.
+              Claim filed on-chain. CRE will monitor provider response time.{" "}
+              <a
+                href={`${process.env.NEXT_PUBLIC_TENDERLY_EXPLORER}/tx/${txHash}`}
+                target="_blank"
+                rel="noreferrer"
+                className="underline font-mono text-xs"
+              >
+                View tx
+              </a>
             </motion.p>
+          )}
+
+          {error && (
+            <p className="text-red-400 text-sm">{error.message.split("\n")[0]}</p>
           )}
         </form>
       </div>
 
-      {/* Existing claims */}
+      {/* On-chain claim count */}
+      {claimCount !== undefined && (
+        <div className="text-sm text-gray-400">
+          Total claims on-chain: <span className="text-white font-mono">{claimCount.toString()}</span>
+        </div>
+      )}
+
+      {/* Recent Breaches (from CRE events) */}
       <div>
-        <h2 className="text-lg font-semibold text-white mb-4">Active Claims</h2>
+        <h2 className="text-lg font-semibold text-white mb-4">Recent CRE-Enforced Breaches</h2>
         <div className="space-y-3">
-          {MOCK_CLAIMS.map(claim => (
+          {MOCK_BREACHES.map((breach, i) => (
             <motion.div
-              key={claim.id}
+              key={i}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               className="rounded-xl p-4 border"
@@ -83,11 +126,14 @@ export default function Claims() {
             >
               <div className="flex items-start justify-between">
                 <div>
-                  <p className="text-white text-sm">{claim.description}</p>
-                  <p className="text-gray-400 text-xs mt-1">SLA #{claim.slaId} &middot; Filed {new Date(claim.filedAt).toLocaleDateString()}</p>
+                  <p className="text-white text-sm font-medium">SLA #{breach.slaId} — Uptime breach detected</p>
+                  <p className="text-gray-400 text-xs mt-1">
+                    Provider {breach.provider} &middot; Uptime {breach.uptimeBps / 100}% &middot; Penalty {breach.penaltyAmount} ETH
+                  </p>
+                  <p className="text-gray-500 text-xs mt-0.5">{new Date(breach.timestamp).toLocaleString()}</p>
                 </div>
-                <span className={`px-2 py-0.5 rounded-full text-xs ${claim.resolved ? 'text-green-400 bg-green-400/10' : 'text-yellow-400 bg-yellow-400/10'}`}>
-                  {claim.resolved ? 'Resolved' : 'Pending'}
+                <span className="px-2 py-0.5 rounded-full text-xs text-red-400 bg-red-400/10">
+                  Auto-Penalized
                 </span>
               </div>
             </motion.div>
