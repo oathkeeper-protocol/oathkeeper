@@ -281,11 +281,11 @@ function test_BreachWarning_Cooldown() public {
 
 **File: `workflow/mock-api/server.ts`**
 
-- [ ] Add `GET /compliance/:address` endpoint:
+- [x] Add `GET /compliance/:address` endpoint:
   ```json
   { "compliant": true, "riskLevel": "low", "reason": "KYC verified", "checks": ["identity", "sanctions", "pep"] }
   ```
-- [ ] Use ENV flag `DEMO_REJECT_ADDRESS` instead of `POST /set-compliance`:
+- [x] Use ENV flag `DEMO_REJECT_ADDRESS` instead of `POST /set-compliance`:
   ```typescript
   // If address matches DEMO_REJECT_ADDRESS env var, return non-compliant
   const rejectAddr = process.env.DEMO_REJECT_ADDRESS?.toLowerCase();
@@ -294,8 +294,8 @@ function test_BreachWarning_Cooldown() public {
   }
   return res.json({ compliant: true, riskLevel: "low", reason: "KYC verified" });
   ```
-- [ ] Default: all addresses compliant (happy path for demo)
-- [ ] Add auth middleware to ALL control endpoints (`/set-uptime`, `/set-provider-uptime`, `/reset`):
+- [x] Default: all addresses compliant (happy path for demo)
+- [x] Add auth middleware to ALL control endpoints (`/set-uptime`, `/set-provider-uptime`, `/reset`):
   ```typescript
   const requireAdminAuth = (req, res, next) => {
     if (req.headers['x-admin-token'] !== (process.env.MOCK_API_ADMIN_SECRET || 'demo-secret')) {
