@@ -204,7 +204,7 @@ function writeBreach(
 }
 
 // --- Core SLA scan logic (shared by cron and log handlers) ---
-function scanSLAs(runtime: Runtime<Config>): { breachCount: number } {
+function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount: number } {
   const config = runtime.config;
   const contractAddress = getAddress(config.slaContractAddress) as Address;
 
@@ -225,6 +225,9 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number } {
 
   let breachCount = 0;
 
+  // Collect active SLA metrics for batched Gemini prediction
+  const activeSLAMetrics: { slaId: number; provider: Address; uptimeBps: number; minUptimeBps: number }[] = [];
+
   for (let i = 0; i < Number(slaCount); i++) {
     const sla = readSla(runtime, evmClient, contractAddress, i);
     if (!sla.active) continue;
@@ -244,7 +247,6 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number } {
 
         return json(response);
       },
-      // Consensus: identical value required across all DON nodes
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       consensusIdenticalAggregation() as any
     )().result();
@@ -260,10 +262,112 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number } {
       writeBreach(runtime, evmClient, contractAddress, i, uptimeBps);
       breachCount++;
     }
+
+    activeSLAMetrics.push({ slaId: i, provider: sla.provider, uptimeBps, minUptimeBps });
   }
 
-  runtime.log(`[OathLayer] Done. Breaches: ${breachCount}`);
-  return { breachCount };
+  // --- AI Breach Prediction via Gemini Flash ---
+  let warningCount = 0;
+
+  if (activeSLAMetrics.length > 0) {
+    try {
+      const geminiKey = runtime.getSecret({ id: "GEMINI_API_KEY" }).result().value;
+      if (!geminiKey) throw new Error("GEMINI_API_KEY secret not configured");
+
+      const confidentialClient = new cre.capabilities.ConfidentialHTTPClient();
+
+      const prompt = `You are an SLA compliance analyzer. Given the following uptime metrics for infrastructure providers, predict the probability of an SLA breach in the next 24 hours for each SLA.
+
+Metrics: ${JSON.stringify(activeSLAMetrics)}
+
+Respond with a JSON array: [{"slaId": <number>, "riskScore": <0-100>, "prediction": "<one sentence max 100 chars>"}]`;
+
+      const geminiResponse = runtime.runInNodeMode(
+        (nodeRuntime) => {
+          const response = confidentialClient.sendRequest(nodeRuntime, {
+            url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": geminiKey,
+            },
+            body: Buffer.from(JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0,
+                maxOutputTokens: 512,
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: {
+                      slaId: { type: "INTEGER" },
+                      riskScore: { type: "INTEGER" },
+                      prediction: { type: "STRING" },
+                    },
+                    required: ["slaId", "riskScore", "prediction"],
+                  },
+                },
+              },
+            })),
+          }).result();
+
+          if (!ok(response)) {
+            throw new Error(`Gemini API HTTP ${response.statusCode}`);
+          }
+
+          return json(response);
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        consensusIdenticalAggregation() as any
+      )().result();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const apiResponse = geminiResponse as any;
+      const predictions = JSON.parse(apiResponse.candidates[0].content.parts[0].text) as {
+        slaId: number;
+        riskScore: number;
+        prediction: string;
+      }[];
+
+      // Get Sepolia client for writing breach warnings
+      const sepoliaNetwork = getNetwork({
+        chainFamily: "evm",
+        chainSelectorName: "ethereum-testnet-sepolia",
+        isTestnet: true,
+      });
+      if (!sepoliaNetwork) throw new Error("Sepolia network not found");
+      const sepoliaClient = new cre.capabilities.EVMClient(sepoliaNetwork.chainSelector.selector);
+
+      for (const pred of predictions) {
+        if (pred.riskScore > 70) {
+          const truncated = pred.prediction.slice(0, 100);
+          runtime.log(`[OathLayer] WARNING SLA ${pred.slaId}: risk=${pred.riskScore} — ${truncated}`);
+
+          const callData = encodeFunctionData({
+            abi: RELAY_ABI,
+            functionName: "recordBreachWarning",
+            args: [BigInt(pred.slaId), BigInt(pred.riskScore), truncated],
+          });
+          const report = runtime.report(prepareReportRequest(callData)).result();
+          sepoliaClient.writeReport(runtime, {
+            receiver: toHex(toBytes(contractAddress, { size: 20 })),
+            report,
+          }).result();
+          warningCount++;
+        }
+      }
+
+      runtime.log(`[OathLayer] Gemini predictions: ${predictions.length} SLAs analyzed, ${warningCount} warnings`);
+    } catch (e) {
+      // Fail silently — better to miss a warning than emit a false one
+      runtime.log(`[OathLayer] Gemini prediction failed: ${(e as Error).message}`);
+    }
+  }
+
+  runtime.log(`[OathLayer] Done. Breaches: ${breachCount}, Warnings: ${warningCount}`);
+  return { breachCount, warningCount };
 }
 
 // --- Cross-chain relay helpers ---

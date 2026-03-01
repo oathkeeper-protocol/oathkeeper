@@ -393,16 +393,16 @@ if (compliance.compliant) {
 **Consensus strategy decided:** Use `consensusMedianAggregation` on the numeric `riskScore` only. Do NOT attempt `identical` consensus on Gemini text output — it will fail due to LLM non-determinism even at temperature=0 (confirmed bug in Gemini 2.5, affects 2.0 Flash too).
 
 Implementation (inline in `scanSLAs()` — no wrapper function):
-- [ ] After fetching uptime metrics (existing consensus block), batch all SLA data into a single Gemini prompt
-- [ ] Call Gemini Flash via `ConfidentialHTTPClient` (protects API key from DON nodes)
-- [ ] Use `x-goog-api-key` header — NOT URL query string
-- [ ] Use `responseSchema` with strict JSON schema for deterministic structure
-- [ ] Use `temperature: 0` and `responseMimeType: "application/json"`
+- [x] After fetching uptime metrics (existing consensus block), batch all SLA data into a single Gemini prompt
+- [x] Call Gemini Flash via `ConfidentialHTTPClient` (protects API key from DON nodes)
+- [x] Use `x-goog-api-key` header — NOT URL query string
+- [x] Use `responseSchema` with strict JSON schema for deterministic structure
+- [x] Use `temperature: 0` and `responseMimeType: "application/json"`
 - [ ] Extract numeric `riskScore` and aggregate via `consensusMedianAggregation`
-- [ ] If `riskScore > 70` → call `recordBreachWarning(slaId, riskScore, prediction)` on Sepolia
-- [ ] If actual breach detected → call `recordBreach()` as before
-- [ ] Fail silently on Gemini errors (no warning emitted)
-- [ ] Fail loudly on missing secret: `if (!geminiKey) throw new Error("GEMINI_API_KEY not configured")`
+- [x] If `riskScore > 70` → call `recordBreachWarning(slaId, riskScore, prediction)` on Sepolia
+- [x] If actual breach detected → call `recordBreach()` as before
+- [x] Fail silently on Gemini errors (no warning emitted)
+- [x] Fail loudly on missing secret: `if (!geminiKey) throw new Error("GEMINI_API_KEY not configured")`
 
 ```typescript
 // workflow/workflow.ts — inside scanSLAs(), after uptime fetch consensus block
