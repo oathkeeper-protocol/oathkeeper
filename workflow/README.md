@@ -1,45 +1,48 @@
-# OathKeeper CRE Workflow
+# OathLayer CRE Workflow
 
-Chainlink CRE (Compute Runtime Engine) workflow that monitors SLA compliance for tokenized real-world assets.
+Chainlink CRE workflow that monitors SLA compliance, runs AI breach prediction, and gates provider registration with confidential HTTP compliance checks.
 
-## Architecture
+## Handlers
 
-```
-CRE Triggers:
-  ├── Cron: every 15 minutes (proactive scan)
-  └── EVM Log: ClaimFiled event (reactive)
-        │
-        ▼
-  Workflow Callback:
-  1. Read slaCount from SLAEnforcement.sol
-  2. For each active SLA:
-     a. httpClient → mock uptime API (provider metrics)
-     b. Check uptime vs SLA minimum threshold
-     c. If breached → evmClient.write → recordBreach()
-        └── Slashes bond, transfers penalty to tenant
-```
+| Handler | Trigger | Action |
+|---------|---------|--------|
+| `onCronTrigger` | Every 15 min | `scanSLAs()` — fetch uptime, detect breaches, run Gemini prediction |
+| `onClaimFiled` | `ClaimFiled` event | Immediate `scanSLAs()` re-scan |
+| `onProviderRegistrationRequested` | World Chain event | ConfidentialHTTPClient KYC check → APPROVED/REJECTED + relay |
+| `onArbitratorRegistrationRequested` | World Chain event | Direct relay to Sepolia |
 
-## Setup
+## CRE Capabilities Used
+
+1. **Cron** — 15-min compliance scan
+2. **EVM Log triggers** — reactive to ClaimFiled, ProviderRegistrationRequested, ArbitratorRegistrationRequested
+3. **ConfidentialHTTPClient** — TEE-encrypted compliance API + Gemini API calls
+4. **Secrets** — threshold-encrypted storage for API keys
+5. **Cross-chain relay** — World Chain → Sepolia via trusted forwarder
+
+## Config
+
+| Key | Description |
+|-----|-------------|
+| `slaContractAddress` | SLAEnforcement on Sepolia |
+| `uptimeApiUrl` | Mock API base URL |
+| `complianceApiUrl` | Compliance API base URL |
+| `chainSelectorName` | CCIP chain name |
+| `worldChainContractAddress` | WorldChainRegistry address |
+| `worldChainSelector` | CCIP chain selector for World Chain |
+
+## Secrets (via `cre secrets create`)
+
+- `UPTIME_API_KEY` — Mock API auth
+- `COMPLIANCE_API_KEY` — Compliance API auth (ConfidentialHTTPClient)
+- `GEMINI_API_KEY` — Gemini 2.0 Flash (ConfidentialHTTPClient)
+
+## Commands
 
 ```bash
 npm install
-```
 
-## Environment Variables
-
-| Variable | Description | Default |
-|---|---|---|
-| `SLA_CONTRACT_ADDRESS` | Deployed SLAEnforcement address | Zero address |
-| `UPTIME_API_URL` | Mock API base URL | http://localhost:3001 |
-| `API_KEY` | Provider API auth token | demo-key |
-
-## Simulate
-
-```bash
-# Dry run (no broadcast)
+# Simulate
 cre workflow simulate --verbose
-
-# With broadcast (writes to chain)
 cre workflow simulate --verbose --broadcast
 ```
 
@@ -48,20 +51,15 @@ cre workflow simulate --verbose --broadcast
 ```bash
 cd mock-api && npm install && npm run dev
 
-# Trigger a breach (set uptime below 99.5%)
-curl -X POST http://localhost:3001/set-uptime -H "Content-Type: application/json" -d '{"uptime": 98.0}'
+# Trigger breach
+curl -X POST http://localhost:3001/set-uptime \
+  -H "Content-Type: application/json" \
+  -H "x-admin-token: demo-secret" \
+  -d '{"uptime": 98.0}'
 
-# Check current state
-curl http://localhost:3001/status
+# Check compliance
+curl http://localhost:3001/compliance/0x742d35Cc6634C0532925a3b844Bc9e7595f2bd9
 
-# Reset to healthy
-curl -X POST http://localhost:3001/reset
+# Reset
+curl -X POST http://localhost:3001/reset -H "x-admin-token: demo-secret"
 ```
-
-## Demo Script
-
-1. Start mock API: `cd mock-api && npm run dev`
-2. Start CRE simulation: `npm run simulate`
-3. Observe compliant state (uptime 99.9%)
-4. Trigger breach: `curl -X POST :3001/set-uptime -d '{"uptime": 98.0}'`
-5. Watch CRE detect breach and call `recordBreach()` on next scan
