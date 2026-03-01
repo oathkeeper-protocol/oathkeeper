@@ -75,6 +75,14 @@ contract SLAEnforcement {
     mapping(address => bool) public verifiedArbitrators;
     mapping(uint256 => bool) public usedNullifiers; // prevent double-use of World ID proofs
 
+    // --- Compliance ---
+    enum ComplianceStatus { NONE, APPROVED, REJECTED }
+    mapping(address => ComplianceStatus) public providerCompliance;
+
+    // --- Breach Prediction ---
+    mapping(uint256 => uint256) public lastWarningTime;
+    uint256 public breachCount;
+
     uint256 public slaCount;
     uint256 public claimCount;
 
@@ -85,6 +93,9 @@ contract SLAEnforcement {
     event ClaimFiled(uint256 indexed claimId, uint256 indexed slaId, address tenant);
     event SLABreached(uint256 indexed slaId, address indexed provider, uint256 uptimeBps, uint256 penaltyAmount);
     event ArbitrationDecision(uint256 indexed slaId, address indexed arbitrator, bool upheld);
+    event ComplianceCheckPassed(address indexed provider);
+    event ComplianceCheckFailed(address indexed provider, string reason);
+    event BreachWarning(uint256 indexed slaId, uint256 riskScore, string prediction);
 
     constructor(
         address _priceFeed,
@@ -107,6 +118,11 @@ contract SLAEnforcement {
 
     modifier onlyCREForwarder() {
         require(msg.sender == creForwarder, "Only CRE forwarder");
+        _;
+    }
+
+    modifier complianceGate() {
+        require(providerCompliance[msg.sender] == ComplianceStatus.APPROVED, "Not compliant");
         _;
     }
 
@@ -196,7 +212,7 @@ contract SLAEnforcement {
         uint256 responseTimeHrs,
         uint256 minUptimeBps,
         uint256 penaltyBps
-    ) external payable returns (uint256) {
+    ) external payable complianceGate returns (uint256) {
         require(verifiedProviders[msg.sender], "Not verified provider");
         require(msg.value > 0, "Must bond collateral");
 
@@ -252,7 +268,26 @@ contract SLAEnforcement {
             sla.active = false;
         }
 
+        breachCount++;
         emit SLABreached(slaId, sla.provider, uptimeBps, penaltyAmount);
+    }
+
+    /// @notice CRE workflow sets compliance status after confidential HTTP check
+    function setComplianceStatus(address provider, ComplianceStatus status) external onlyCREForwarder {
+        require(providerCompliance[provider] != ComplianceStatus.REJECTED, "Permanently blocked");
+        providerCompliance[provider] = status;
+        if (status == ComplianceStatus.APPROVED) {
+            emit ComplianceCheckPassed(provider);
+        } else if (status == ComplianceStatus.REJECTED) {
+            emit ComplianceCheckFailed(provider, "Compliance check failed");
+        }
+    }
+
+    /// @notice CRE workflow emits breach warning from AI prediction
+    function recordBreachWarning(uint256 slaId, uint256 riskScore, string calldata prediction) external onlyCREForwarder {
+        require(lastWarningTime[slaId] == 0 || block.timestamp - lastWarningTime[slaId] >= 4 hours, "Warning cooldown");
+        lastWarningTime[slaId] = block.timestamp;
+        emit BreachWarning(slaId, riskScore, prediction);
     }
 
     /// @notice World ID verified arbitrator upholds or overturns a breach

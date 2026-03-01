@@ -179,18 +179,18 @@ function test_RecordBreach_FromCRE_Succeeds() public {
 **File: `contracts/src/SLAEnforcement.sol`**
 
 Enhancement 1 — Compliance:
-- [ ] Add `ComplianceStatus` enum: `NONE, APPROVED, REJECTED` (PENDING dropped — see rationale above)
-- [ ] Add `mapping(address => ComplianceStatus) public providerCompliance`
-- [ ] Add `complianceGate` modifier on `createSLA`: `require(providerCompliance[msg.sender] == ComplianceStatus.APPROVED, "Not compliant")`
-- [ ] Add `setComplianceStatus(address provider, ComplianceStatus status)` — CRE-only, with rejection permanence guard
-- [ ] Add events: `ComplianceCheckPassed(address indexed provider)`, `ComplianceCheckFailed(address indexed provider, string reason)`
+- [x] Add `ComplianceStatus` enum: `NONE, APPROVED, REJECTED` (PENDING dropped — see rationale above)
+- [x] Add `mapping(address => ComplianceStatus) public providerCompliance`
+- [x] Add `complianceGate` modifier on `createSLA`: `require(providerCompliance[msg.sender] == ComplianceStatus.APPROVED, "Not compliant")`
+- [x] Add `setComplianceStatus(address provider, ComplianceStatus status)` — CRE-only, with rejection permanence guard
+- [x] Add events: `ComplianceCheckPassed(address indexed provider)`, `ComplianceCheckFailed(address indexed provider, string reason)`
 
 Enhancement 2 — Breach Prediction:
-- [ ] Add `BreachWarning(uint256 indexed slaId, uint256 riskScore, string prediction)` event
-- [ ] Add `recordBreachWarning(uint256 slaId, uint256 riskScore, string calldata prediction)` — CRE-only
-- [ ] Add `mapping(uint256 => uint256) public lastWarningTime` — cooldown tracking
-- [ ] Add `uint256 public breachCount` — incremented in `recordBreach()` for dashboard stat card
-- [ ] Enforce 4-hour cooldown: `require(block.timestamp - lastWarningTime[slaId] >= 4 hours)`
+- [x] Add `BreachWarning(uint256 indexed slaId, uint256 riskScore, string prediction)` event
+- [x] Add `recordBreachWarning(uint256 slaId, uint256 riskScore, string calldata prediction)` — CRE-only
+- [x] Add `mapping(uint256 => uint256) public lastWarningTime` — cooldown tracking
+- [x] Add `uint256 public breachCount` — incremented in `recordBreach()` for dashboard stat card
+- [x] Enforce 4-hour cooldown: `require(block.timestamp - lastWarningTime[slaId] >= 4 hours)`
 
 ```solidity
 // contracts/src/SLAEnforcement.sol — Phase 1 additions
