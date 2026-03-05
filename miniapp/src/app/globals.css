@@ -1,12 +1,116 @@
 @import "tailwindcss";
 
+@theme {
+  --color-chainlink-blue: #375BD2;
+  --color-chainlink-light: #5493F7;
+  --color-chainlink-dark: #1a1a2e;
+}
+
+:root {
+  --background: #0a0a14;
+  --foreground: #e2e8f0;
+  --card: #151525;
+  --card-border: rgba(255, 255, 255, 0.08);
+  --card-border-hover: rgba(255, 255, 255, 0.14);
+  --chainlink-blue: #375BD2;
+  --chainlink-light: #5493F7;
+  --muted: rgba(255, 255, 255, 0.45);
+  --muted-strong: rgba(255, 255, 255, 0.6);
+  --input-bg: rgba(255, 255, 255, 0.04);
+  --sat: 48px;
+  --sab: 0px;
+}
+
 * {
   -webkit-tap-highlight-color: transparent;
 }
 
 body {
-  background: #000;
-  color: #fff;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'General Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 500;
   overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Glass card — GPU-only animations (transform + opacity) */
+.glass-card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  transition: transform 0.15s ease-out;
+}
+.glass-card:active {
+  transform: scale(0.98);
+}
+
+/* Primary button */
+.btn-primary {
+  background: var(--chainlink-blue);
+  color: white;
+  font-weight: 600;
+  border-radius: 16px;
+  transition: opacity 0.15s ease;
+  cursor: pointer;
+}
+.btn-primary:active:not(:disabled) {
+  opacity: 0.8;
+}
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Input styling */
+input[type="text"],
+input[type="number"],
+textarea {
+  background: var(--input-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+}
+input[type="text"]:focus,
+input[type="number"]:focus,
+textarea:focus {
+  border-color: rgba(84, 147, 247, 0.4);
+  box-shadow: 0 0 0 3px rgba(84, 147, 247, 0.1);
+  outline: none;
+}
+
+/* Ambient mesh gradient — shifts based on system state */
+.mesh-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.25;
+  transition: background 1.5s ease;
+  pointer-events: none;
+}
+.mesh-bg--healthy {
+  background:
+    radial-gradient(ellipse at 20% 50%, #375BD2 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, #5493F7 0%, transparent 50%),
+    #0a0a14;
+  animation: meshDrift 8s ease-in-out infinite alternate;
+}
+.mesh-bg--warning {
+  background:
+    radial-gradient(ellipse at 30% 60%, #D29537 0%, transparent 50%),
+    radial-gradient(ellipse at 70% 30%, #5493F7 0%, transparent 50%),
+    #0a0a14;
+}
+.mesh-bg--breach {
+  background:
+    radial-gradient(ellipse at 50% 50%, #D23737 0%, transparent 50%),
+    radial-gradient(ellipse at 20% 80%, #375BD2 0%, transparent 50%),
+    #0a0a14;
+  animation: meshPulse 2s ease-in-out infinite;
+}
+
+@keyframes meshDrift {
+  to { background-position: 60% 40%, 30% 70%; }
+}
+@keyframes meshPulse {
+  50% { opacity: 0.4; }
 }
