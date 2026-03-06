@@ -3,7 +3,7 @@
 // Triggers: Cron (every 15 min) + EVM Log (ClaimFiled event)
 //           + EVM Log (ProviderRegistrationRequested on World Chain)
 //           + EVM Log (ArbitratorRegistrationRequested on World Chain)
-// Actions: fetch uptime → detect breach → write recordBreach() on-chain
+// Actions: fetch uptime → detect breach → AI Tribunal (3 agents) → write on-chain
 //          relay World ID verifications from World Chain → Sepolia
 
 import {
@@ -129,6 +129,189 @@ const RELAY_ABI = [
 // Mirrors SLAEnforcement.ComplianceStatus enum — keep in sync with contract
 const ComplianceStatus = { NONE: 0, APPROVED: 1, REJECTED: 2 } as const;
 
+// --- AI Tribunal Council types ---
+
+type AgentVote = {
+  vote: "BREACH" | "WARNING" | "NO_BREACH";
+  confidence: number;
+  reasoning: string;
+};
+
+type SLAVote = {
+  slaId: number;
+  vote: AgentVote;
+};
+
+type TribunalVerdict = {
+  slaId: number;
+  action: "BREACH" | "WARNING" | "NONE";
+  councilConfidence: number;
+  tally: string;
+  summary: string;
+};
+
+// --- AI Tribunal Council prompts ---
+
+const TRIBUNAL_PROMPTS = {
+  riskAnalyst: `You are a Risk Analyst for an SLA enforcement system. Analyze uptime metrics and predict breach probability in the next 24 hours. Be data-driven and objective. Consider current metrics against SLA thresholds and trend direction.
+
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+
+Respond with a JSON array of votes for all SLAs.`,
+
+  providerAdvocate: (analystAssessment: string) => `You are a Provider Advocate defending infrastructure providers against wrongful SLA penalties. Your job is to protect providers from false slashing.
+
+The Risk Analyst has assessed: ${analystAssessment}
+
+Find mitigating factors: temporary dips, maintenance windows, recovery trends in historical data, measurement noise, or threshold proximity that doesn't warrant action.
+
+Your bias is to PROTECT providers. Only vote BREACH if evidence is absolutely undeniable despite your best defense.
+
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+
+Respond with a JSON array of votes for all SLAs.`,
+
+  enforcementJudge: (analystAssessment: string, advocateDefense: string) => `You are the Enforcement Judge in an SLA tribunal. You must weigh the Risk Analyst's findings against the Provider Advocate's defense and render a fair verdict.
+
+Risk Analyst says: ${analystAssessment}
+Provider Advocate says: ${advocateDefense}
+
+Only vote BREACH if evidence is overwhelming despite the defense. Your vote is the tiebreaker — be deliberate.
+
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+
+Respond with a JSON array of votes for all SLAs.`,
+};
+
+// --- Tribunal helper: call Groq via ConfidentialHTTPClient ---
+
+function callTribunalAgent(
+  runtime: Runtime<Config>,
+  systemPrompt: string,
+  userPrompt: string,
+  groqKey: string,
+  temperature: number = 0
+): SLAVote[] {
+  const confidentialClient = new cre.capabilities.ConfidentialHTTPClient();
+
+  const response = confidentialClient.sendRequest(runtime, {
+    request: {
+      url: "https://api.groq.com/openai/v1/chat/completions",
+      method: "POST",
+      multiHeaders: {
+        "Content-Type": { values: ["application/json"] },
+        Authorization: { values: [`Bearer ${groqKey}`] },
+      },
+      bodyString: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 1024,
+        temperature,
+        response_format: { type: "json_object" },
+      }),
+    },
+  }).result();
+
+  if (!ok(response)) {
+    throw new Error(`Groq API HTTP ${response.statusCode}`);
+  }
+
+  const body = new TextDecoder().decode(response.body);
+  type GroqResponse = { choices: Array<{ message: { content: string } }> };
+  const parsed = JSON.parse(body) as GroqResponse;
+  const content = parsed.choices[0]?.message?.content;
+  if (!content) throw new Error("Groq returned empty response");
+
+  // Parse JSON — handle both array and {votes: [...]} wrapper
+  const jsonParsed = JSON.parse(content);
+  const votes: SLAVote[] = Array.isArray(jsonParsed)
+    ? jsonParsed
+    : Array.isArray(jsonParsed.votes)
+      ? jsonParsed.votes
+      : Array.isArray(jsonParsed.results)
+        ? jsonParsed.results
+        : [];
+
+  // Normalize: LLM may return {slaId, vote, confidence, reasoning} (flat)
+  // or {slaId, vote: {vote, confidence, reasoning}} (nested)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return votes.map((v: any) => {
+    const isNested = typeof v.vote === "object" && v.vote !== null;
+    const rawVote: string = isNested ? v.vote.vote : v.vote;
+    const rawConf: number = isNested ? v.vote.confidence : v.confidence;
+    const rawReason: string = isNested ? v.vote.reasoning : v.reasoning;
+
+    return {
+      slaId: Number(v.slaId),
+      vote: {
+        vote: (["BREACH", "WARNING", "NO_BREACH"].includes(rawVote) ? rawVote : "NO_BREACH") as AgentVote["vote"],
+        confidence: Math.max(0, Math.min(1, Number(rawConf) || 0.5)),
+        reasoning: String(rawReason ?? "").slice(0, 100),
+      },
+    };
+  });
+}
+
+// --- Tribunal: tally votes and determine verdict ---
+
+function tallyTribunalVotes(
+  slaId: number,
+  analystVote: AgentVote | undefined,
+  advocateVote: AgentVote | undefined,
+  judgeVote: AgentVote | undefined
+): TribunalVerdict {
+  const votes = [
+    { role: "Analyst", vote: analystVote },
+    { role: "Advocate", vote: advocateVote },
+    { role: "Judge", vote: judgeVote },
+  ].filter(v => v.vote !== undefined) as { role: string; vote: AgentVote }[];
+
+  if (votes.length === 0) {
+    return { slaId, action: "NONE", councilConfidence: 0, tally: "0-0", summary: "No tribunal votes received" };
+  }
+
+  const breachVotes = votes.filter(v => v.vote.vote === "BREACH");
+  const warningVotes = votes.filter(v => v.vote.vote === "WARNING");
+  const noBreachVotes = votes.filter(v => v.vote.vote === "NO_BREACH");
+
+  // Weighted confidence (Judge gets 1.5x)
+  let weightedSum = 0;
+  let weightTotal = 0;
+  for (const v of votes) {
+    const weight = v.role === "Judge" ? 1.5 : 1.0;
+    weightedSum += v.vote.confidence * weight;
+    weightTotal += weight;
+  }
+  const councilConfidence = weightTotal > 0 ? weightedSum / weightTotal : 0;
+
+  // Determine action by voting rules
+  let action: TribunalVerdict["action"];
+  let tally: string;
+
+  if (breachVotes.length === votes.length) {
+    action = "BREACH";
+    tally = `${votes.length}-0 BREACH`;
+  } else if (breachVotes.length > votes.length / 2) {
+    action = "WARNING"; // Majority breach but not unanimous → high-confidence warning
+    tally = `${breachVotes.length}-${votes.length - breachVotes.length} BREACH`;
+  } else if (noBreachVotes.length === votes.length) {
+    action = "NONE";
+    tally = `0-${votes.length} CLEAR`;
+  } else {
+    action = warningVotes.length > 0 ? "WARNING" : "NONE";
+    tally = `${breachVotes.length}-${noBreachVotes.length} SPLIT`;
+  }
+
+  // Build summary: who voted what
+  const voteSummaries = votes.map(v => `${v.role}: ${v.vote.reasoning}`);
+  const summary = `[${tally}] ${voteSummaries.join("; ")}`.slice(0, 200);
+
+  return { slaId, action, councilConfidence: parseFloat(councilConfidence.toFixed(2)), tally, summary };
+}
+
 // --- EVM helpers ---
 
 function readSlaCount(
@@ -228,7 +411,7 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
 
   let breachCount = 0;
 
-  // Collect active SLA metrics for batched Gemini prediction
+  // Collect active SLA metrics for batched AI Tribunal deliberation
   const activeSLAMetrics: { slaId: number; provider: Address; uptimeBps: number; minUptimeBps: number }[] = [];
 
   for (let i = 0; i < Number(slaCount); i++) {
@@ -269,69 +452,101 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
     activeSLAMetrics.push({ slaId: i, provider: sla.provider, uptimeBps, minUptimeBps });
   }
 
-  // --- AI Breach Prediction via Gemini Flash ---
+  // --- AI Tribunal Council: 3-Agent Breach Determination ---
+  // Sequential: Risk Analyst → Provider Advocate → Enforcement Judge
+  // Each agent sees the previous agent's output for adversarial deliberation
   let warningCount = 0;
 
   if (activeSLAMetrics.length > 0) {
     try {
-      const geminiKey = runtime.getSecret({ id: "GEMINI_API_KEY" }).result().value;
-      if (!geminiKey) throw new Error("GEMINI_API_KEY secret not configured");
+      const groqKey = runtime.getSecret({ id: "GROQ_API_KEY" }).result().value;
+      if (!groqKey) throw new Error("GROQ_API_KEY secret not configured");
 
-      const confidentialClient = new cre.capabilities.ConfidentialHTTPClient();
-
-      const prompt = `You are an SLA compliance analyzer. Given the following uptime metrics for infrastructure providers, predict the probability of an SLA breach in the next 24 hours for each SLA.
-
-Metrics: ${JSON.stringify(activeSLAMetrics)}
-
-Respond with a JSON array: [{"slaId": <number>, "riskScore": <0-100>, "prediction": "<one sentence max 100 chars>"}]`;
-
-      const geminiHttpResponse = confidentialClient.sendRequest(runtime, {
-        request: {
-          url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-          method: "POST",
-          multiHeaders: {
-            "Content-Type": { values: ["application/json"] },
-            "x-goog-api-key": { values: [geminiKey] },
-          },
-          bodyString: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0,
-              maxOutputTokens: 512,
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: "ARRAY",
-                items: {
-                  type: "OBJECT",
-                  properties: {
-                    slaId: { type: "INTEGER" },
-                    riskScore: { type: "INTEGER" },
-                    prediction: { type: "STRING" },
-                  },
-                  required: ["slaId", "riskScore", "prediction"],
-                },
-              },
+      // Fetch historical uptime for each provider (for Provider Advocate context)
+      const providerHistories: Record<string, { timestamp: string; uptimePercent: number }[]> = {};
+      for (const metric of activeSLAMetrics) {
+        try {
+          const historyData = runtime.runInNodeMode(
+            (nodeRuntime) => {
+              const response = httpClient.sendRequest(nodeRuntime, {
+                url: `${config.uptimeApiUrl}/provider/${metric.provider}/history`,
+                method: "GET",
+                headers: { Authorization: `Bearer ${apiKey}` },
+              }).result();
+              if (!ok(response)) throw new Error(`HTTP ${response.statusCode}`);
+              return json(response);
             },
-          }),
-        },
-      }).result();
-
-      if (!ok(geminiHttpResponse)) {
-        throw new Error(`Gemini API HTTP ${geminiHttpResponse.statusCode}`);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            consensusIdenticalAggregation() as any
+          )().result() as { history: { timestamp: string; uptimePercent: number }[] };
+          providerHistories[metric.provider] = historyData.history;
+        } catch {
+          // History fetch is best-effort — Advocate works without it
+          providerHistories[metric.provider] = [];
+        }
       }
 
-      const apiResponseBody = new TextDecoder().decode(geminiHttpResponse.body);
-      type GeminiResponse = { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
-      const apiResponse = JSON.parse(apiResponseBody) as GeminiResponse;
-      const rawText = apiResponse.candidates[0]?.content.parts[0]?.text;
-      if (!rawText) throw new Error("Gemini returned empty candidates");
-      const predictions = JSON.parse(rawText) as {
-        slaId: number;
-        riskScore: number;
-        prediction: string;
-      }[];
+      const metricsWithHistory = activeSLAMetrics.map(m => ({
+        ...m,
+        history: providerHistories[m.provider] ?? [],
+      }));
 
-      // Get Sepolia client for writing breach warnings
+      const metricsJson = JSON.stringify(metricsWithHistory);
+
+      // --- Agent 1: Risk Analyst (temperature 0 — strict data analysis) ---
+      runtime.log("[OathLayer] Tribunal: Risk Analyst evaluating...");
+      let analystVotes: SLAVote[] = [];
+      try {
+        analystVotes = callTribunalAgent(
+          runtime,
+          TRIBUNAL_PROMPTS.riskAnalyst,
+          `Current SLA metrics with 7-day history:\n${metricsJson}`,
+          groqKey,
+          0
+        );
+      } catch (e) {
+        runtime.log(`[OathLayer] Tribunal: Risk Analyst failed: ${(e as Error).message}`);
+      }
+
+      const analystSummary = JSON.stringify(analystVotes.map(v => ({
+        slaId: v.slaId, vote: v.vote.vote, confidence: v.vote.confidence, reasoning: v.vote.reasoning,
+      })));
+
+      // --- Agent 2: Provider Advocate (temperature 0.3 — slight creativity for defense) ---
+      runtime.log("[OathLayer] Tribunal: Provider Advocate defending...");
+      let advocateVotes: SLAVote[] = [];
+      try {
+        advocateVotes = callTribunalAgent(
+          runtime,
+          TRIBUNAL_PROMPTS.providerAdvocate(analystSummary),
+          `Current SLA metrics with 7-day history:\n${metricsJson}`,
+          groqKey,
+          0.3
+        );
+      } catch (e) {
+        runtime.log(`[OathLayer] Tribunal: Provider Advocate failed: ${(e as Error).message}`);
+      }
+
+      const advocateSummary = JSON.stringify(advocateVotes.map(v => ({
+        slaId: v.slaId, vote: v.vote.vote, confidence: v.vote.confidence, reasoning: v.vote.reasoning,
+      })));
+
+      // --- Agent 3: Enforcement Judge (temperature 0 — deliberate, precedent-aware) ---
+      runtime.log("[OathLayer] Tribunal: Enforcement Judge deliberating...");
+      let judgeVotes: SLAVote[] = [];
+      try {
+        judgeVotes = callTribunalAgent(
+          runtime,
+          TRIBUNAL_PROMPTS.enforcementJudge(analystSummary, advocateSummary),
+          `Current SLA metrics with 7-day history:\n${metricsJson}`,
+          groqKey,
+          0
+        );
+      } catch (e) {
+        runtime.log(`[OathLayer] Tribunal: Enforcement Judge failed: ${(e as Error).message}`);
+      }
+
+      // --- Tally votes and submit verdicts ---
       const sepoliaNetwork = getNetwork({
         chainFamily: "evm",
         chainSelectorName: "ethereum-testnet-sepolia",
@@ -340,15 +555,30 @@ Respond with a JSON array: [{"slaId": <number>, "riskScore": <0-100>, "predictio
       if (!sepoliaNetwork) throw new Error("Sepolia network not found");
       const sepoliaClient = new cre.capabilities.EVMClient(sepoliaNetwork.chainSelector.selector);
 
-      for (const pred of predictions) {
-        if (pred.riskScore > 70) {
-          const truncated = pred.prediction.slice(0, 100);
-          runtime.log(`[OathLayer] WARNING SLA ${pred.slaId}: risk=${pred.riskScore} — ${truncated}`);
+      for (const metric of activeSLAMetrics) {
+        const analystVote = analystVotes.find(v => v.slaId === metric.slaId)?.vote;
+        const advocateVote = advocateVotes.find(v => v.slaId === metric.slaId)?.vote;
+        const judgeVote = judgeVotes.find(v => v.slaId === metric.slaId)?.vote;
+
+        const verdict = tallyTribunalVotes(metric.slaId, analystVote, advocateVote, judgeVote);
+
+        runtime.log(`[OathLayer] Tribunal SLA ${metric.slaId}: ${verdict.tally} (confidence: ${verdict.councilConfidence})`);
+
+        if (verdict.action === "BREACH") {
+          // Unanimous breach — record breach (slashing)
+          runtime.log(`[OathLayer] TRIBUNAL BREACH SLA ${metric.slaId}: unanimous — slashing bond`);
+          writeBreach(runtime, evmClient, contractAddress, metric.slaId, metric.uptimeBps);
+          breachCount++;
+        } else if (verdict.action === "WARNING") {
+          // Majority breach or warning votes — record as breach warning
+          const confidenceScore = Math.round(verdict.councilConfidence * 100);
+          const truncatedSummary = verdict.summary.slice(0, 200);
+          runtime.log(`[OathLayer] TRIBUNAL WARNING SLA ${metric.slaId}: ${truncatedSummary}`);
 
           const callData = encodeFunctionData({
             abi: RELAY_ABI,
             functionName: "recordBreachWarning",
-            args: [BigInt(pred.slaId), BigInt(pred.riskScore), truncated],
+            args: [BigInt(metric.slaId), BigInt(confidenceScore), truncatedSummary],
           });
           const report = runtime.report(prepareReportRequest(callData)).result();
           sepoliaClient.writeReport(runtime, {
@@ -357,12 +587,13 @@ Respond with a JSON array: [{"slaId": <number>, "riskScore": <0-100>, "predictio
           }).result();
           warningCount++;
         }
+        // NONE = unanimous no-breach, skip
       }
 
-      runtime.log(`[OathLayer] Gemini predictions: ${predictions.length} SLAs analyzed, ${warningCount} warnings`);
+      runtime.log(`[OathLayer] Tribunal complete: ${activeSLAMetrics.length} SLAs deliberated, ${warningCount} warnings, ${breachCount} breaches`);
     } catch (e) {
       // Fail silently — better to miss a warning than emit a false one
-      runtime.log(`[OathLayer] Gemini prediction failed: ${(e as Error).message}`);
+      runtime.log(`[OathLayer] Tribunal failed: ${(e as Error).message}`);
     }
   }
 

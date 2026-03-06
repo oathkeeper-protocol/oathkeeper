@@ -96,6 +96,28 @@ function RiskBadge({ score }: { score: number }) {
   );
 }
 
+function TribunalBadge({ tally }: { tally: string }) {
+  const isBreach = tally.includes("BREACH");
+  const isClear = tally.includes("CLEAR");
+  return (
+    <span
+      className="px-2.5 py-1 rounded-md text-[11px] font-mono font-medium"
+      style={{
+        color: isBreach ? "#ef4444" : isClear ? "rgba(74,222,128,0.8)" : "#f59e0b",
+        background: isBreach ? "rgba(239,68,68,0.1)" : isClear ? "rgba(74,222,128,0.08)" : "rgba(245,158,11,0.1)",
+      }}
+    >
+      {tally}
+    </span>
+  );
+}
+
+function parseTribunalPrediction(prediction: string): { tally: string; summary: string } {
+  const match = prediction.match(/^\[([^\]]+)\]\s*(.*)/);
+  if (match) return { tally: match[1], summary: match[2] };
+  return { tally: "", summary: prediction };
+}
+
 // --- Main Dashboard ---
 
 export default function Dashboard() {
@@ -219,16 +241,18 @@ export default function Dashboard() {
       <motion.div variants={stagger} className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         <StatCard label="Active SLAs" value={`${activeSLAs}`} subtitle="agreements enforced" />
         <StatCard label="Total Bonded" value={`${totalBonded.toFixed(2)} ETH`} subtitle="locked as collateral" />
-        <StatCard label="Warnings" value={`${breachWarnings.length}`} subtitle="AI predictions" />
+        <StatCard label="Warnings" value={`${breachWarnings.length}`} subtitle="tribunal verdicts" />
         <StatCard label="Breaches" value={`${breachCountNum}`} subtitle="penalties executed" />
       </motion.div>
 
       {/* Breach Warnings */}
       {breachWarnings.length > 0 && (
         <motion.div variants={fadeUp}>
-          <h2 className="text-[15px] font-semibold text-white mb-3">AI Breach Predictions</h2>
+          <h2 className="text-[15px] font-semibold text-white mb-3">AI Tribunal Predictions</h2>
           <div className="space-y-2">
-            {breachWarnings.slice(0, 10).map((w, i) => (
+            {breachWarnings.slice(0, 10).map((w, i) => {
+              const { tally, summary } = parseTribunalPrediction(w.prediction);
+              return (
               <motion.div
                 key={`${w.slaId}-${w.blockNumber}-${i}`}
                 initial={{ opacity: 0, x: -8 }}
@@ -239,13 +263,17 @@ export default function Dashboard() {
                   borderColor: Number(w.riskScore) > 70 ? "rgba(239,68,68,0.15)" : undefined,
                 }}
               >
-                <div>
-                  <span className="font-mono text-[12px]" style={{ color: "var(--muted)" }}>SLA #{Number(w.slaId)}</span>
-                  <p className="text-white text-[13px] mt-0.5">{w.prediction}</p>
+                <div className="flex-1 min-w-0 mr-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[12px]" style={{ color: "var(--muted)" }}>SLA #{Number(w.slaId)}</span>
+                    {tally && <TribunalBadge tally={tally} />}
+                  </div>
+                  <p className="text-white text-[13px] mt-0.5 truncate">{summary}</p>
                 </div>
                 <RiskBadge score={Number(w.riskScore)} />
               </motion.div>
-            ))}
+              );
+            })}
           </div>
         </motion.div>
       )}

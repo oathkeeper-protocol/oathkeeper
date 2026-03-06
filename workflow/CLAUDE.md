@@ -6,7 +6,7 @@ Chainlink CRE (Compute Runtime Engine) workflow + mock API server.
 
 Single-file CRE workflow with 4 handlers:
 
-1. **Cron (15min)** → `scanSLAs()` — reads all SLAs, fetches uptime, detects breaches, runs Gemini prediction
+1. **Cron (15min)** → `scanSLAs()` — reads all SLAs, fetches uptime, detects breaches, runs AI Tribunal (3-agent council via Groq)
 2. **ClaimFiled event** → `scanSLAs()` — immediate re-scan on tenant claim
 3. **ProviderRegistrationRequested** → confidential HTTP compliance check → APPROVED/REJECTED + relay
 4. **ArbitratorRegistrationRequested** → direct relay to Sepolia
@@ -14,11 +14,14 @@ Single-file CRE workflow with 4 handlers:
 ### Key Patterns
 - `runtime.runInNodeMode()` + `consensusIdenticalAggregation()` for DON consensus
 - `ConfidentialHTTPClient` for compliance API (TEE-encrypted, PII protected)
-- `ConfidentialHTTPClient` for Gemini API (API key protected from DON nodes)
+- `ConfidentialHTTPClient` for Groq API (API key protected from DON nodes)
 - `encodeFunctionData` / `prepareReportRequest` / `writeReport` for on-chain writes
-- Gemini uses `responseSchema` + `responseMimeType: "application/json"` for structured output
-- Batch all SLA metrics into single Gemini prompt (avoids 15 RPM rate limit)
-- `riskScore > 70` triggers `recordBreachWarning()` on-chain
+- **AI Tribunal Council**: 3 agents (Risk Analyst → Provider Advocate → Enforcement Judge) deliberate sequentially
+  - Each agent uses Groq (Llama 3.3 70B) via `ConfidentialHTTPClient` with `response_format: { type: "json_object" }`
+  - Votes tallied with Judge at 1.5x weight; unanimous BREACH → slash, majority → warning, unanimous clear → skip
+  - Prediction string packed as `[TALLY] summary` (e.g. `[2-1 BREACH] Analyst: ...; Advocate: ...; Judge: ...`)
+- Batch all SLA metrics into single prompt per agent call
+- Historical uptime fetched from `/provider/:address/history` for Provider Advocate context
 
 ### Config Schema (z.object)
 - `slaContractAddress` — SLAEnforcement on Sepolia
@@ -29,16 +32,18 @@ Single-file CRE workflow with 4 handlers:
 - `worldChainSelector` — CCIP chain selector for World Chain
 
 ### CRE Secrets
-- `UPTIME_API_KEY`, `COMPLIANCE_API_KEY`, `GEMINI_API_KEY`
+- `UPTIME_API_KEY`, `COMPLIANCE_API_KEY`, `GROQ_API_KEY`
 
 ## mock-api/server.ts
 
 Express server on `:3001` with:
 - `GET /provider/:address/uptime` — returns uptime data (called by CRE)
+- `GET /provider/:address/history` — returns 7-day uptime history (used by AI Tribunal's Provider Advocate)
 - `GET /compliance/:address` — returns KYC compliance (called via ConfidentialHTTPClient)
 - `POST /set-uptime` — demo control (admin auth required)
 - `POST /set-provider-uptime` — per-provider override (admin auth required)
-- `POST /reset` — reset all uptime (admin auth required)
+- `POST /set-history` — inject custom history for demo scenarios (admin auth required)
+- `POST /reset` — reset all uptime and history (admin auth required)
 - `GET /status` — health check
 
 Admin auth: `x-admin-token` header matching `MOCK_API_ADMIN_SECRET` env var (default: `demo-secret`).

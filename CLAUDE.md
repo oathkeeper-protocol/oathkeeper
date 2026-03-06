@@ -1,6 +1,6 @@
 # OathLayer
 
-Privacy-first, AI-powered SLA enforcement for tokenized real-world assets. Chainlink CRE automates compliance monitoring, Gemini Flash predicts breaches, World ID gates provider identity.
+Privacy-first, AI-powered SLA enforcement for tokenized real-world assets. Chainlink CRE automates compliance monitoring, AI Tribunal Council (3-agent Groq/Llama 3.3) predicts breaches, World ID gates provider identity.
 
 ## Architecture
 
@@ -9,8 +9,8 @@ World Chain (4801)          CRE Workflows              Sepolia (Tenderly VNet)
 ┌──────────────────┐   ┌─────────────────────┐   ┌──────────────────┐
 │ WorldChainRegistry│   │ Cron (15min)        │   │ SLAEnforcement   │
 │   register() ────┼──→│   → uptime fetch    │   │   recordBreach() │
-│   ProviderReg    │   │   → Gemini Flash    │──→│   recordWarn()   │
-│   Requested      │   │   → breach predict  │   │   compliance gate│
+│   ProviderReg    │   │   → AI Tribunal     │──→│   recordWarn()   │
+│   Requested      │   │   → 3-agent council │   │   compliance gate│
 │                  │   │ ProviderRegReq ─────┼──→│   setCompliance  │
 │                  │   │   → ConfidHTTP KYC  │   │   createSLA()    │
 └──────────────────┘   └─────────────────────┘   └──────────────────┘
@@ -79,4 +79,4 @@ cd dashboard && npm install && npm run dev
 ### CRE Secrets (via `cre secrets create`)
 - `UPTIME_API_KEY` — Mock API auth
 - `COMPLIANCE_API_KEY` — Compliance API auth (used via ConfidentialHTTPClient)
-- `GEMINI_API_KEY` — Gemini 2.0 Flash API key (used via ConfidentialHTTPClient)
+- `GROQ_API_KEY` — Groq API key for Llama 3.3 70B (AI Tribunal, used via ConfidentialHTTPClient)
