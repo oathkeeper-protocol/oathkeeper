@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import { useReadContract, useReadContracts, usePublicClient, useWatchContractEvent } from "wagmi";
 import { formatEther, parseAbiItem } from "viem";
 import { SLA_CONTRACT_ADDRESS, SLA_ABI, DEPLOY_BLOCK } from "@/lib/contract";
@@ -160,18 +159,24 @@ function RiskBadge({ score }: { score: number }) {
   );
 }
 
-function TribunalBadge({ tally }: { tally: string }) {
+function TribunalBadge({ tally, penalized }: { tally: string; penalized: boolean }) {
+  // Tally format: "3-0 BREACH", "2-1 BREACH", "0-3 CLEAR"
+  // penalized = true means SLABreached event exists (actual slash with ETH penalty)
   const isBreach = tally.includes("BREACH");
   const isClear = tally.includes("CLEAR");
+  const voteMatch = tally.match(/^(\d+-\d+)/);
+  const votes = voteMatch ? voteMatch[1] : "";
+
+  const label = penalized ? "PENALIZED" : isBreach ? "WARNING" : isClear ? "CLEAR" : tally;
+  const color = penalized ? "#ef4444" : isBreach ? "#f59e0b" : "rgba(74,222,128,0.8)";
+  const bg = penalized ? "rgba(239,68,68,0.1)" : isBreach ? "rgba(245,158,11,0.1)" : "rgba(74,222,128,0.08)";
+
   return (
     <span
-      className="px-2.5 py-1 rounded-md text-[11px] font-mono font-medium"
-      style={{
-        color: isBreach ? "#ef4444" : isClear ? "rgba(74,222,128,0.8)" : "#f59e0b",
-        background: isBreach ? "rgba(239,68,68,0.1)" : isClear ? "rgba(74,222,128,0.08)" : "rgba(245,158,11,0.1)",
-      }}
+      className="px-2 py-0.5 rounded-md text-[11px] font-mono font-medium"
+      style={{ color, background: bg }}
     >
-      {tally}
+      {votes} {label}
     </span>
   );
 }
@@ -183,89 +188,6 @@ function parseTribunalPrediction(prediction: string): { tally: string; summary: 
 }
 
 // --- Main Dashboard ---
-
-function DemoControls() {
-  const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  const [loading, setLoading] = useState<string | null>(null);
-
-  const callDemo = useCallback(async (action: string, params?: Record<string, unknown>) => {
-    setLoading(action);
-    setStatus(null);
-    try {
-      const res = await fetch("/api/demo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, ...params }),
-      });
-      const data = await res.json();
-      setStatus(data.message || data.error || JSON.stringify(data));
-    } catch (e: any) {
-      setStatus(`Error: ${e.message}`);
-    } finally {
-      setLoading(null);
-    }
-  }, []);
-
-  return (
-    <div className="fixed bottom-6 right-6 z-50">
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-            className="glass-card glass-card-glow rounded-2xl p-5 mb-3 w-72"
-            style={{ border: "1px solid rgba(55,91,210,0.3)" }}
-          >
-            <p className="font-semibold text-white text-[14px] mb-3">Demo Controls</p>
-            <div className="space-y-2">
-              <button
-                onClick={() => callDemo("demo-breach", { uptime: 94.0 })}
-                disabled={!!loading}
-                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
-                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
-              >
-                {loading === "demo-breach" ? "Triggering..." : "Trigger Breach (94% uptime)"}
-              </button>
-              <button
-                onClick={() => callDemo("trigger-scan")}
-                disabled={!!loading}
-                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
-                style={{ background: "rgba(55,91,210,0.1)", border: "1px solid rgba(55,91,210,0.2)", color: "var(--chainlink-light)" }}
-              >
-                {loading === "trigger-scan" ? "Scanning..." : "Run CRE Scan"}
-              </button>
-              <button
-                onClick={() => callDemo("reset")}
-                disabled={!!loading}
-                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
-                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--card-border)", color: "var(--muted-strong)" }}
-              >
-                {loading === "reset" ? "Resetting..." : "Reset to Healthy"}
-              </button>
-            </div>
-            {status && (
-              <p className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--muted)" }}>{status}</p>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
-        style={{
-          background: open ? "rgba(55,91,210,0.3)" : "rgba(55,91,210,0.15)",
-          border: "1px solid rgba(55,91,210,0.3)",
-          marginLeft: "auto",
-        }}
-        title="Demo Controls"
-      >
-        <span className="text-[18px]">{open ? "\u2715" : "\u2699"}</span>
-      </button>
-    </div>
-  );
-}
 
 export default function Dashboard() {
   const publicClient = usePublicClient();
@@ -366,6 +288,9 @@ export default function Dashboard() {
 
   // All warnings sorted newest first (full history, can have multiple per SLA)
   const allWarningsSorted = [...breachWarnings].sort((a, b) => Number(b.blockNumber) - Number(a.blockNumber));
+
+  // Set of SLA IDs that have been actually penalized (SLABreached events)
+  const penalizedSlaIds = new Set(breachEvents.map(e => Number(e.slaId)));
 
   // Latest risk score per SLA (for badge on SLA cards)
   const latestRiskScores = new Map<number, number>();
@@ -531,7 +456,7 @@ export default function Dashboard() {
                     </div>
                     {tally && (
                       <div className="mb-1.5">
-                        <TribunalBadge tally={tally} />
+                        <TribunalBadge tally={tally} penalized={penalizedSlaIds.has(Number(w.slaId))} />
                       </div>
                     )}
                     <p className="text-[12px] leading-relaxed" style={{ color: "var(--muted-strong)" }}>{summary}</p>
@@ -593,15 +518,6 @@ export default function Dashboard() {
         </div>
       )}
     </motion.div>
-    <Suspense fallback={null}>
-      <DemoGate />
-    </Suspense>
     </>
   );
-}
-
-function DemoGate() {
-  const searchParams = useSearchParams();
-  if (searchParams.get("demo") !== "true") return null;
-  return <DemoControls />;
 }

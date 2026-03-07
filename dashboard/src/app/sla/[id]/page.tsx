@@ -18,6 +18,7 @@ const fadeUp = {
 
 type BreachEvent = { uptimeBps: bigint; penaltyAmount: bigint; blockNumber: bigint; transactionHash: string };
 type ClaimEvent = { claimId: bigint; tenant: string; blockNumber: bigint; transactionHash: string };
+type WarningEvent = { riskScore: bigint; prediction: string; blockNumber: bigint };
 
 export default function SLADetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -25,6 +26,7 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
   const publicClient = usePublicClient();
   const [breaches, setBreaches] = useState<BreachEvent[]>([]);
   const [claims, setClaims] = useState<ClaimEvent[]>([]);
+  const [warnings, setWarnings] = useState<WarningEvent[]>([]);
 
   const { data: slaRaw, isLoading } = useReadContract({
     address: SLA_CONTRACT_ADDRESS, abi: SLA_ABI, functionName: "slas", args: [slaId],
@@ -37,7 +39,7 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
   useEffect(() => {
     if (!publicClient) return;
     const fetchEvents = async () => {
-      const [breachLogs, claimLogs] = await Promise.all([
+      const [breachLogs, claimLogs, warningLogs] = await Promise.all([
         publicClient.getLogs({
           address: SLA_CONTRACT_ADDRESS,
           event: parseAbiItem("event SLABreached(uint256 indexed slaId, address indexed provider, uint256 uptimeBps, uint256 penaltyAmount)"),
@@ -48,6 +50,11 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
           event: parseAbiItem("event ClaimFiled(uint256 indexed claimId, uint256 indexed slaId, address tenant)"),
           args: { slaId }, fromBlock: DEPLOY_BLOCK, toBlock: "latest",
         }),
+        publicClient.getLogs({
+          address: SLA_CONTRACT_ADDRESS,
+          event: parseAbiItem("event BreachWarning(uint256 indexed slaId, uint256 riskScore, string prediction)"),
+          args: { slaId }, fromBlock: DEPLOY_BLOCK, toBlock: "latest",
+        }),
       ]);
       setBreaches(breachLogs.map(log => ({
         uptimeBps: log.args.uptimeBps!, penaltyAmount: log.args.penaltyAmount!,
@@ -56,6 +63,10 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
       setClaims(claimLogs.map(log => ({
         claimId: log.args.claimId!, tenant: log.args.tenant!,
         blockNumber: log.blockNumber, transactionHash: log.transactionHash,
+      })).reverse());
+      setWarnings(warningLogs.map(log => ({
+        riskScore: log.args.riskScore!, prediction: log.args.prediction!,
+        blockNumber: log.blockNumber,
       })).reverse());
     };
     fetchEvents();
@@ -153,6 +164,44 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
           </motion.div>
         )}
 
+        {/* Tribunal Verdicts */}
+        {warnings.length > 0 && (
+          <motion.div custom={4} variants={fadeUp}>
+            <h2 className="text-[15px] font-semibold text-white mb-3">AI Tribunal History</h2>
+            <div className="space-y-2">
+              {warnings.map((w, i) => {
+                const match = w.prediction.match(/^\[([^\]]+)\]\s*(.*)/);
+                const tally = match ? match[1] : "";
+                const summary = match ? match[2] : w.prediction;
+                const isBreach = tally.includes("BREACH");
+                const isClear = tally.includes("CLEAR");
+                const penalized = breaches.length > 0;
+                const votes = tally.match(/^(\d+-\d+)/)?.[1] || "";
+                const label = (isBreach && penalized) ? "PENALIZED" : isBreach ? "WARNING" : isClear ? "CLEAR" : tally;
+                const color = (isBreach && penalized) ? "#ef4444" : isBreach ? "#f59e0b" : "rgba(74,222,128,0.8)";
+                const bg = (isBreach && penalized) ? "rgba(239,68,68,0.1)" : isBreach ? "rgba(245,158,11,0.1)" : "rgba(74,222,128,0.08)";
+
+                return (
+                  <div key={`${w.blockNumber}-${i}`} className="glass-card rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span
+                        className="px-2 py-0.5 rounded-md text-[11px] font-mono font-medium"
+                        style={{ color, background: bg }}
+                      >
+                        {votes} {label}
+                      </span>
+                      <span className="text-[11px] font-mono" style={{ color: "var(--muted)" }}>
+                        Risk: {Number(w.riskScore)} · Block {Number(w.blockNumber)}
+                      </span>
+                    </div>
+                    <p className="text-[12px] leading-relaxed" style={{ color: "var(--muted-strong)" }}>{summary}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+
         {/* Claims */}
         {claims.length > 0 && (
           <motion.div custom={4} variants={fadeUp}>
@@ -170,9 +219,9 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
           </motion.div>
         )}
 
-        {breaches.length === 0 && claims.length === 0 && (
+        {breaches.length === 0 && claims.length === 0 && warnings.length === 0 && (
           <motion.p custom={3} variants={fadeUp} className="text-center py-8 text-[13px]" style={{ color: "var(--muted)" }}>
-            No breach or claim events recorded for this SLA.
+            No breach, warning, or claim events recorded for this SLA.
           </motion.p>
         )}
       </motion.div>

@@ -1,7 +1,7 @@
 ---
 title: Pre-Submission Polish
 type: feat
-status: active
+status: completed
 date: 2026-03-08
 deadline: 2026-03-09
 estimated_effort: 60 min

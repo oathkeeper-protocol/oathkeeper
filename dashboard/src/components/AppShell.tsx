@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, useBalance } from "wagmi";
@@ -20,7 +20,7 @@ const NAV_LINKS = [
   { label: "Arbitrate", href: "/arbitrate" },
 ];
 
-function DemoBanner({ onDismiss }: { onDismiss: () => void }) {
+function DemoBanner({ onDismiss, onEnableDemo }: { onDismiss: () => void; onEnableDemo: () => void }) {
   const [copied, setCopied] = useState(false);
 
   const copyRpc = () => {
@@ -56,17 +56,28 @@ function DemoBanner({ onDismiss }: { onDismiss: () => void }) {
         style={{ border: "1px solid rgba(55,91,210,0.3)" }}
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center gap-2.5 mb-4">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-[13px] font-semibold"
-            style={{ background: "rgba(55,91,210,0.2)", color: "var(--chainlink-light)" }}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2.5">
+            <div
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-[13px] font-semibold"
+              style={{ background: "rgba(55,91,210,0.2)", color: "var(--chainlink-light)" }}
+            >
+              !
+            </div>
+            <div>
+              <p className="font-semibold text-white text-[15px]">Demo Mode</p>
+              <p className="text-[12px]" style={{ color: "var(--muted)" }}>Tenderly Virtual Network (Sepolia fork)</p>
+            </div>
+          </div>
+          <button
+            onClick={onDismiss}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-[16px] transition-colors"
+            style={{ color: "var(--muted)", background: "rgba(255,255,255,0.04)" }}
+            onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
+            onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
           >
-            !
-          </div>
-          <div>
-            <p className="font-semibold text-white text-[15px]">Demo Mode</p>
-            <p className="text-[12px]" style={{ color: "var(--muted)" }}>Tenderly Virtual Network (Sepolia fork)</p>
-          </div>
+            &times;
+          </button>
         </div>
 
         <p className="text-[13px] leading-relaxed mb-4" style={{ color: "var(--muted-strong)" }}>
@@ -96,6 +107,7 @@ function DemoBanner({ onDismiss }: { onDismiss: () => void }) {
           <p>1. Open wallet settings → Networks → Sepolia</p>
           <p>2. Replace RPC URL with the one above</p>
           <p>3. Fund your wallet using the Tenderly faucet</p>
+          <p>4. Click <span className="text-white">Demo Controls</span> to trigger breaches & scans</p>
         </div>
 
         <div className="flex gap-3">
@@ -113,14 +125,108 @@ function DemoBanner({ onDismiss }: { onDismiss: () => void }) {
             </a>
           )}
           <button
-            onClick={onDismiss}
-            className={`${TENDERLY_EXPLORER ? "flex-1" : "w-full"} btn-primary py-2.5 text-[13px]`}
+            onClick={() => { onEnableDemo(); onDismiss(); }}
+            className="flex-1 btn-primary py-2.5 text-[13px]"
           >
-            Got it
+            Demo Controls
           </button>
         </div>
       </motion.div>
     </motion.div>
+  );
+}
+
+function DemoControls({ onExit }: { onExit: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+
+  const callDemo = useCallback(async (action: string, params?: Record<string, unknown>) => {
+    setLoading(action);
+    setStatus(null);
+    try {
+      const res = await fetch("/api/demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...params }),
+      });
+      const data = await res.json();
+      setStatus(data.message || data.error || JSON.stringify(data));
+    } catch (e: any) {
+      setStatus(`Error: ${e.message}`);
+    } finally {
+      setLoading(null);
+    }
+  }, []);
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50">
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+            className="glass-card glass-card-glow rounded-2xl p-5 mb-3 w-72"
+            style={{ border: "1px solid rgba(55,91,210,0.3)" }}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <p className="font-semibold text-white text-[14px]">Demo Controls</p>
+              <button
+                onClick={onExit}
+                className="text-[11px] px-2 py-0.5 rounded-md transition-colors"
+                style={{ color: "var(--muted)", border: "1px solid var(--card-border)" }}
+                onMouseEnter={e => e.currentTarget.style.color = "#fff"}
+                onMouseLeave={e => e.currentTarget.style.color = "var(--muted)"}
+              >
+                Exit Demo
+              </button>
+            </div>
+            <div className="space-y-2">
+              <button
+                onClick={() => callDemo("demo-breach", { uptime: 94.0 })}
+                disabled={!!loading}
+                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
+                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
+              >
+                {loading === "demo-breach" ? "Triggering..." : "Trigger Breach (94% uptime)"}
+              </button>
+              <button
+                onClick={() => callDemo("trigger-scan")}
+                disabled={!!loading}
+                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
+                style={{ background: "rgba(55,91,210,0.1)", border: "1px solid rgba(55,91,210,0.2)", color: "var(--chainlink-light)" }}
+              >
+                {loading === "trigger-scan" ? "Scanning..." : "Run CRE Scan"}
+              </button>
+              <button
+                onClick={() => callDemo("reset")}
+                disabled={!!loading}
+                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--card-border)", color: "var(--muted-strong)" }}
+              >
+                {loading === "reset" ? "Resetting..." : "Reset to Healthy"}
+              </button>
+            </div>
+            {status && (
+              <p className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--muted)" }}>{status}</p>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
+        style={{
+          background: open ? "rgba(55,91,210,0.3)" : "rgba(55,91,210,0.15)",
+          border: "1px solid rgba(55,91,210,0.3)",
+          marginLeft: "auto",
+        }}
+        title="Demo Controls"
+      >
+        <span className="text-[18px]">{open ? "\u2715" : "\u2699"}</span>
+      </button>
+    </div>
   );
 }
 
@@ -146,13 +252,35 @@ function WalletBalance() {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isLanding = pathname === "/";
-  const [showDemo, setShowDemo] = useState(!isLanding);
+  const [showBanner, setShowBanner] = useState(!isLanding);
+  const [demoMode, setDemoMode] = useState(false);
+
+  // Initialize demoMode from localStorage or ?demo=true on mount
+  useEffect(() => {
+    const stored = localStorage.getItem("oathlayer-demo");
+    const fromUrl = new URLSearchParams(window.location.search).get("demo") === "true";
+    if (stored === "true" || fromUrl) {
+      setDemoMode(true);
+      if (fromUrl) localStorage.setItem("oathlayer-demo", "true");
+    }
+  }, []);
+
+  const enableDemo = () => {
+    setDemoMode(true);
+    localStorage.setItem("oathlayer-demo", "true");
+  };
+
+  const disableDemo = () => {
+    setDemoMode(false);
+    localStorage.removeItem("oathlayer-demo");
+  };
 
   return (
     <div className="noise-overlay">
       <AnimatePresence>
-        {showDemo && !isLanding && <DemoBanner onDismiss={() => setShowDemo(false)} />}
+        {showBanner && !isLanding && <DemoBanner onDismiss={() => setShowBanner(false)} onEnableDemo={enableDemo} />}
       </AnimatePresence>
+      {demoMode && !isLanding && <DemoControls onExit={disableDemo} />}
       <nav
         style={{
           background: isLanding ? "transparent" : "rgba(10, 10, 20, 0.8)",

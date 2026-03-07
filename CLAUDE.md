@@ -60,6 +60,7 @@ cd dashboard && npm install && npm run dev
 - TypeScript: CRE SDK patterns — `runtime.runInNodeMode()` for consensus, `.result()` for sync unwrap
 - Dashboard: wagmi hooks, `useReadContracts` multicall for batch reads, `getLogs` on mount for history + `useWatchContractEvent` (5s poll) for real-time (no duplicate 30s interval)
 - Dashboard events: deduplicated by blockNumber/txHash in `useWatchContractEvent` handlers
+- Production note: `getLogs` works at demo scale but would be replaced by a subgraph (The Graph) or indexer (Ponder/Envio) for production — avoids block scanning, adds caching, enables complex queries
 - Tests: Foundry `vm.prank`/`vm.expectRevert`/`vm.warp` patterns
 - Access control: `onlyCREForwarder` modifier for all CRE-callable functions
 - Compliance: `ComplianceStatus` enum (NONE=0, APPROVED=1, REJECTED=2), rejection is permanent
