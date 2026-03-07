@@ -8,9 +8,20 @@ export async function POST(req: Request) {
   const { action, ...params } = await req.json();
 
   const endpoints: Record<string, { path: string; body?: object }> = {
-    "trigger-scan": { path: "/trigger-scan", body: { broadcast: true, triggerIndex: 0 } },
-    "demo-breach": { path: "/demo-breach", body: { uptime: params.uptime ?? 94.0 } },
-    "set-uptime": { path: "/set-uptime", body: { uptime: params.uptime ?? 99.9 } },
+    "demo-breach": {
+      path: "/demo-breach",
+      body: {
+        slaId: params.slaId ?? null,
+        uptime: params.uptime ?? 94.0,
+      },
+    },
+    "demo-warning": {
+      path: "/demo-warning",
+      body: {
+        slaId: params.slaId ?? null,
+        uptime: params.uptime ?? 97.0,
+      },
+    },
     reset: { path: "/reset" },
   };
 

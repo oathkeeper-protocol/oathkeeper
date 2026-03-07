@@ -141,6 +141,7 @@ function DemoControls({ onExit }: { onExit: () => void }) {
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [uptime, setUptime] = useState("94.0");
+  const [slaId, setSlaId] = useState("all");
 
   const callDemo = useCallback(async (action: string, params?: Record<string, unknown>) => {
     setLoading(action);
@@ -163,6 +164,11 @@ function DemoControls({ onExit }: { onExit: () => void }) {
       setLoading(null);
     }
   }, []);
+
+  const demoParams = {
+    uptime: parseFloat(uptime),
+    slaId: slaId === "all" ? null : parseInt(slaId),
+  };
 
   return (
     <div className="fixed bottom-6 right-6 z-50">
@@ -188,7 +194,20 @@ function DemoControls({ onExit }: { onExit: () => void }) {
               </button>
             </div>
             <div className="space-y-2">
-              {/* Uptime input */}
+              <div className="flex items-center gap-2">
+                <label className="text-[11px] font-medium shrink-0" style={{ color: "var(--muted)" }}>SLA</label>
+                <select
+                  value={slaId}
+                  onChange={e => setSlaId(e.target.value)}
+                  className="flex-1 py-1.5 px-2 rounded-lg text-[12px] font-mono text-white bg-transparent outline-none"
+                  style={{ border: "1px solid var(--card-border)" }}
+                >
+                  <option value="all" style={{ background: "#1a1a2e" }}>All SLAs</option>
+                  {[0, 1, 2, 3, 4].map(i => (
+                    <option key={i} value={i} style={{ background: "#1a1a2e" }}>SLA #{i}</option>
+                  ))}
+                </select>
+              </div>
               <div className="flex items-center gap-2">
                 <label className="text-[11px] font-medium shrink-0" style={{ color: "var(--muted)" }}>Uptime %</label>
                 <input
@@ -203,28 +222,20 @@ function DemoControls({ onExit }: { onExit: () => void }) {
                 />
               </div>
               <button
-                onClick={() => callDemo("set-uptime", { uptime: parseFloat(uptime) })}
-                disabled={!!loading}
-                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
-                style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b" }}
-              >
-                {loading === "set-uptime" ? "Setting..." : `Set Uptime → ${uptime}%`}
-              </button>
-              <button
-                onClick={() => callDemo("demo-breach", { uptime: parseFloat(uptime) })}
+                onClick={() => callDemo("demo-breach", demoParams)}
                 disabled={!!loading}
                 className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
                 style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
               >
-                {loading === "demo-breach" ? "Triggering..." : `Trigger Breach (${uptime}%)`}
+                {loading === "demo-breach" ? "Breaching..." : `Simulate Breach (${uptime}%)`}
               </button>
               <button
-                onClick={() => callDemo("trigger-scan")}
+                onClick={() => callDemo("demo-warning", demoParams)}
                 disabled={!!loading}
                 className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
-                style={{ background: "rgba(55,91,210,0.1)", border: "1px solid rgba(55,91,210,0.2)", color: "var(--chainlink-light)" }}
+                style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b" }}
               >
-                {loading === "trigger-scan" ? "Scanning..." : "Run CRE Scan"}
+                {loading === "demo-warning" ? "Warning..." : "Warning Only (no slash)"}
               </button>
               <button
                 onClick={() => { setUptime("99.9"); callDemo("reset"); }}
@@ -232,7 +243,7 @@ function DemoControls({ onExit }: { onExit: () => void }) {
                 className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
                 style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--card-border)", color: "var(--muted-strong)" }}
               >
-                {loading === "reset" ? "Resetting..." : "Reset to Healthy (99.9%)"}
+                {loading === "reset" ? "Resetting..." : "Reset to Healthy"}
               </button>
             </div>
             {status && (

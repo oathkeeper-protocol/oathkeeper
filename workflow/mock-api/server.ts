@@ -2,10 +2,42 @@
 // Mock provider uptime API for OathLayer demo
 // Allows controlling uptime % to trigger/clear breaches during demo
 
+import 'dotenv/config';
+import path from 'path';
+import { config } from 'dotenv';
 import express, { Request, Response } from 'express';
+import { createWalletClient, createPublicClient, http, parseAbi, encodeFunctionData } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { sepolia } from 'viem/chains';
+
+// Load env from parent workflow/.env
+config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
 app.use(express.json());
+
+// --- Viem setup for direct contract calls ---
+const RPC_URL = process.env.TENDERLY_RPC_URL || '';
+const PRIVATE_KEY = process.env.CRE_ETH_PRIVATE_KEY as `0x${string}` | undefined;
+const CONTRACT = process.env.SLA_CONTRACT_ADDRESS as `0x${string}` | undefined;
+
+const SLA_ABI = parseAbi([
+  'function recordBreach(uint256 slaId, uint256 uptimeBps) external',
+  'function recordBreachWarning(uint256 slaId, uint256 riskScore, string prediction) external',
+  'function slas(uint256) view returns (address provider, address tenant, string serviceName, uint256 bondAmount, uint256 responseTimeHrs, uint256 minUptimeBps, uint256 penaltyBps, uint256 breachCount, bool active)',
+  'function slaCount() view returns (uint256)',
+]);
+
+const account = PRIVATE_KEY ? privateKeyToAccount(PRIVATE_KEY) : null;
+const walletClient = account && RPC_URL ? createWalletClient({
+  account,
+  chain: sepolia,
+  transport: http(RPC_URL),
+}) : null;
+const publicClient = RPC_URL ? createPublicClient({
+  chain: sepolia,
+  transport: http(RPC_URL),
+}) : null;
 
 // Per-provider uptime state (defaults to healthy 99.9%)
 const providerUptime: Record<string, number> = {};
@@ -146,91 +178,110 @@ app.post('/set-history', requireAdminAuth, (req: Request, res: Response) => {
   res.json({ ok: true, address, entries: history.length });
 });
 
-// POST /trigger-scan — run CRE simulation (broadcast mode)
-// Demo convenience: triggers the CRE cron scan from the API instead of CLI
-app.post('/trigger-scan', requireAdminAuth, async (req: Request, res: Response) => {
-  const { broadcast = true, triggerIndex = 0 } = req.body as { broadcast?: boolean; triggerIndex?: number };
-  const creBin = `${process.env.HOME}/.cre/bin/cre`;
-  const projectRoot = require('path').resolve(__dirname, '../..');
-  const workflowPath = require('path').resolve(__dirname, '..');
+// POST /demo-breach — simulate breach directly on-chain
+// Calls recordBreachWarning (AI tribunal verdict) + recordBreach (penalty slash)
+// Body: { slaId?: number, uptime?: number }
+//   slaId: null/undefined = all active SLAs, number = specific SLA
+//   uptime: the simulated uptime % (default: 94.0)
+app.post('/demo-breach', requireAdminAuth, async (req: Request, res: Response) => {
+  if (!walletClient || !publicClient || !CONTRACT) {
+    res.status(500).json({ error: 'Contract client not configured (check TENDERLY_RPC_URL, CRE_ETH_PRIVATE_KEY, SLA_CONTRACT_ADDRESS)' });
+    return;
+  }
 
-  const args = [
-    'workflow', 'simulate', workflowPath,
-    '--target', 'local-simulation',
-    '--non-interactive',
-    '--trigger-index', String(triggerIndex),
-    ...(broadcast ? ['--broadcast'] : []),
-  ];
+  const { slaId = null, uptime = 94.0 } = req.body as { slaId?: number | null; uptime?: number };
+  const uptimeBps = Math.round(uptime * 100); // 94.0% → 9400
+  const riskScore = Math.max(0, Math.min(100, Math.round(100 - uptime))); // lower uptime → higher risk
+  const prediction = `[3-0 BREACH] Analyst: Uptime ${uptime}% below threshold; Advocate: No mitigating factors; Judge: Penalty warranted`;
 
-  console.log(`[MockAPI] Triggering CRE scan: ${creBin} ${args.join(' ')}`);
+  globalUptime = uptime;
 
   try {
-    const { execFile } = require('child_process');
-    const child = execFile(creBin, args, {
-      cwd: projectRoot,
-      timeout: 120_000,
-      env: { ...process.env },
-    }, (error: Error | null, stdout: string, stderr: string) => {
-      if (error) {
-        console.error(`[MockAPI] CRE scan failed:`, error.message);
-        console.error(stderr);
-      } else {
-        console.log(`[MockAPI] CRE scan completed`);
-        console.log(stdout.slice(-500));
+    // Determine which SLAs to breach
+    let slaIds: number[] = [];
+    if (slaId !== null && slaId !== undefined) {
+      slaIds = [slaId];
+    } else {
+      const count = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slaCount' });
+      for (let i = 0; i < Number(count); i++) {
+        const data = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slas', args: [BigInt(i)] });
+        if (data[8]) slaIds.push(i); // only active SLAs
       }
-    });
+    }
+
+    const results: { slaId: number; warning?: string; breach?: string; error?: string }[] = [];
+
+    for (const id of slaIds) {
+      try {
+        // 1. Record breach warning (AI tribunal verdict)
+        const warnHash = await walletClient.writeContract({
+          address: CONTRACT, abi: SLA_ABI, functionName: 'recordBreachWarning',
+          args: [BigInt(id), BigInt(riskScore), prediction],
+        });
+        console.log(`[MockAPI] SLA #${id} — BreachWarning tx: ${warnHash}`);
+
+        // 2. Record breach (slash bond)
+        const breachHash = await walletClient.writeContract({
+          address: CONTRACT, abi: SLA_ABI, functionName: 'recordBreach',
+          args: [BigInt(id), BigInt(uptimeBps)],
+        });
+        console.log(`[MockAPI] SLA #${id} — Breach tx: ${breachHash}`);
+
+        results.push({ slaId: id, warning: warnHash, breach: breachHash });
+      } catch (err: any) {
+        console.error(`[MockAPI] SLA #${id} breach failed:`, err.message?.slice(0, 200));
+        results.push({ slaId: id, error: err.message?.slice(0, 200) });
+      }
+    }
 
     res.json({
       ok: true,
-      message: `CRE scan triggered (broadcast: ${broadcast}, trigger: ${triggerIndex})`,
-      note: 'Scan runs in background — check server logs for result',
+      message: `Breach simulated for ${results.length} SLA(s) at ${uptime}% uptime`,
+      results,
     });
   } catch (err: any) {
-    console.error('[MockAPI] Failed to spawn CRE:', err);
-    res.status(500).json({ error: 'Failed to trigger CRE scan', detail: err.message });
+    res.status(500).json({ error: 'Failed to simulate breach', detail: err.message });
   }
 });
 
-// POST /demo-breach — one-click: drop uptime + trigger CRE scan
-// Convenience endpoint for demo: sets uptime low and immediately runs the scan
-app.post('/demo-breach', requireAdminAuth, async (req: Request, res: Response) => {
-  const { uptime = 94.0 } = req.body as { uptime?: number };
-  globalUptime = uptime;
-  console.log(`[MockAPI] Demo breach: uptime set to ${uptime}%, triggering CRE scan...`);
+// POST /demo-warning — simulate AI tribunal warning only (no slash)
+app.post('/demo-warning', requireAdminAuth, async (req: Request, res: Response) => {
+  if (!walletClient || !publicClient || !CONTRACT) {
+    res.status(500).json({ error: 'Contract client not configured' });
+    return;
+  }
 
-  // Trigger the scan internally
-  const creBin = `${process.env.HOME}/.cre/bin/cre`;
-  const projectRoot = require('path').resolve(__dirname, '../..');
-  const workflowPath = require('path').resolve(__dirname, '..');
+  const { slaId = null, uptime = 97.0 } = req.body as { slaId?: number | null; uptime?: number };
+  const riskScore = Math.max(0, Math.min(100, Math.round(100 - uptime)));
+  const prediction = `[2-1 BREACH] Analyst: Uptime trending down; Advocate: Temporary degradation; Judge: Warning issued`;
+
+  globalUptime = uptime;
 
   try {
-    const { execFile } = require('child_process');
-    execFile(creBin, [
-      'workflow', 'simulate', workflowPath,
-      '--target', 'local-simulation',
-      '--non-interactive',
-      '--trigger-index', '0',
-      '--broadcast',
-    ], {
-      cwd: projectRoot,
-      timeout: 120_000,
-      env: { ...process.env },
-    }, (error: Error | null, stdout: string, stderr: string) => {
-      if (error) {
-        console.error(`[MockAPI] Demo breach scan failed:`, error.message);
-      } else {
-        console.log(`[MockAPI] Demo breach scan completed`);
-        console.log(stdout.slice(-500));
-      }
-    });
+    let slaIds: number[] = [];
+    if (slaId !== null && slaId !== undefined) {
+      slaIds = [slaId];
+    } else {
+      const count = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slaCount' });
+      for (let i = 0; i < Number(count); i++) slaIds.push(i);
+    }
 
-    res.json({
-      ok: true,
-      message: `Uptime set to ${uptime}%, CRE scan triggered`,
-      note: 'Scan runs in background — dashboard will update when breach is recorded on-chain',
-    });
+    const results: { slaId: number; warning?: string; error?: string }[] = [];
+    for (const id of slaIds) {
+      try {
+        const hash = await walletClient.writeContract({
+          address: CONTRACT, abi: SLA_ABI, functionName: 'recordBreachWarning',
+          args: [BigInt(id), BigInt(riskScore), prediction],
+        });
+        results.push({ slaId: id, warning: hash });
+      } catch (err: any) {
+        results.push({ slaId: id, error: err.message?.slice(0, 200) });
+      }
+    }
+
+    res.json({ ok: true, message: `Warning issued for ${results.length} SLA(s)`, results });
   } catch (err: any) {
-    res.status(500).json({ error: 'Failed to trigger scan', detail: err.message });
+    res.status(500).json({ error: 'Failed', detail: err.message });
   }
 });
 
@@ -248,9 +299,10 @@ app.listen(PORT, () => {
   console.log(`[MockAPI] OathLayer mock uptime API running on :${PORT}`);
   console.log(`[MockAPI] Endpoints:`);
   console.log(`  GET  /status                  — health check`);
-  console.log(`  POST /set-uptime              — set global uptime`);
-  console.log(`  POST /trigger-scan            — run CRE simulation`);
-  console.log(`  POST /demo-breach             — one-click: drop uptime + trigger scan`);
+  console.log(`  GET  /provider/:addr/uptime   — provider uptime`);
+  console.log(`  GET  /provider/:addr/history  — 7-day history`);
+  console.log(`  POST /demo-breach             — breach + slash on-chain`);
+  console.log(`  POST /demo-warning            — warning only (no slash)`);
   console.log(`  POST /reset                   — reset all to healthy`);
 });
 
