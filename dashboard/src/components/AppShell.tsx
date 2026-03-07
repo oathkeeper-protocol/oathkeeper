@@ -196,17 +196,15 @@ function DemoControls({ onExit }: { onExit: () => void }) {
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <label className="text-[11px] font-medium shrink-0" style={{ color: "var(--muted)" }}>SLA</label>
-                <select
+                <input
+                  type="text"
                   value={slaId}
                   onChange={e => setSlaId(e.target.value)}
+                  placeholder="all"
                   className="flex-1 py-1.5 px-2 rounded-lg text-[12px] font-mono text-white bg-transparent outline-none"
                   style={{ border: "1px solid var(--card-border)" }}
-                >
-                  <option value="all" style={{ background: "#1a1a2e" }}>All SLAs</option>
-                  {[0, 1, 2, 3, 4].map(i => (
-                    <option key={i} value={i} style={{ background: "#1a1a2e" }}>SLA #{i}</option>
-                  ))}
-                </select>
+                />
+                <span className="text-[10px] shrink-0" style={{ color: "var(--muted)" }}>or #</span>
               </div>
               <div className="flex items-center gap-2">
                 <label className="text-[11px] font-medium shrink-0" style={{ color: "var(--muted)" }}>Uptime %</label>
