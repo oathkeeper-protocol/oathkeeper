@@ -1,41 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { useReadContract, useReadContracts, usePublicClient, useWatchContractEvent } from "wagmi";
-import { formatEther, parseAbiItem } from "viem";
-import { SLA_CONTRACT_ADDRESS, SLA_ABI, DEPLOY_BLOCK } from "@/lib/contract";
+import { formatEther } from "viem";
+import { useDashboardData } from "@/hooks/usePonderData";
 import Link from "next/link";
-
-// --- Types ---
-type SLAData = {
-  id: number;
-  provider: string;
-  tenant: string;
-  serviceName: string;
-  bondAmount: bigint;
-  responseTimeHrs: bigint;
-  minUptimeBps: bigint;
-  penaltyBps: bigint;
-  createdAt: bigint;
-  active: boolean;
-};
-
-type BreachWarningEvent = {
-  slaId: bigint;
-  riskScore: bigint;
-  prediction: string;
-  blockNumber: bigint;
-};
-
-type BreachEvent = {
-  slaId: bigint;
-  provider: string;
-  uptimeBps: bigint;
-  penaltyAmount: bigint;
-  blockNumber: bigint;
-  transactionHash: string;
-};
 
 // --- Animation variants ---
 const stagger = {
@@ -181,130 +149,23 @@ function TribunalBadge({ tally, penalized }: { tally: string; penalized: boolean
   );
 }
 
-function parseTribunalPrediction(prediction: string): { tally: string; summary: string } {
-  const match = prediction.match(/^\[([^\]]+)\]\s*(.*)/);
-  if (match) return { tally: match[1], summary: match[2] };
-  return { tally: "", summary: prediction };
-}
-
 // --- Main Dashboard ---
 
 export default function Dashboard() {
-  const publicClient = usePublicClient();
+  const {
+    slas, breaches, warnings, isLoading,
+    activeSLAs, totalBonded, breachCount,
+    penalizedSlaIds, latestRiskScores,
+  } = useDashboardData();
 
-  const { data: slaCount } = useReadContract({
-    address: SLA_CONTRACT_ADDRESS,
-    abi: SLA_ABI,
-    functionName: "slaCount",
-  });
+  // Warnings already sorted desc from Ponder query
+  const allWarningsSorted = warnings;
 
-  const { data: breachCount } = useReadContract({
-    address: SLA_CONTRACT_ADDRESS,
-    abi: SLA_ABI,
-    functionName: "breachCount",
-  });
-
-  const slaIds = Array.from({ length: Number(slaCount ?? 0) }, (_, i) => i);
-  const { data: slaResults } = useReadContracts({
-    contracts: slaIds.map(id => ({
-      address: SLA_CONTRACT_ADDRESS,
-      abi: SLA_ABI,
-      functionName: "slas" as const,
-      args: [BigInt(id)] as const,
-    })),
-  });
-
-  const slas: SLAData[] = (slaResults ?? []).map((result, i) => {
-    if (result.status !== "success" || !result.result) return null;
-    const r = result.result as readonly [string, string, string, bigint, bigint, bigint, bigint, bigint, boolean];
-    return {
-      id: i, provider: r[0], tenant: r[1], serviceName: r[2], bondAmount: r[3], responseTimeHrs: r[4],
-      minUptimeBps: r[5], penaltyBps: r[6], createdAt: r[7], active: r[8],
-    };
-  }).filter(Boolean) as SLAData[];
-
-  const [breachWarnings, setBreachWarnings] = useState<BreachWarningEvent[]>([]);
-  const [breachEvents, setBreachEvents] = useState<BreachEvent[]>([]);
-
-  useEffect(() => {
-    if (!publicClient) return;
-    const fetchEvents = async () => {
-      const [warningLogs, breachLogs] = await Promise.all([
-        publicClient.getLogs({
-          address: SLA_CONTRACT_ADDRESS,
-          event: parseAbiItem("event BreachWarning(uint256 indexed slaId, uint256 riskScore, string prediction)"),
-          fromBlock: DEPLOY_BLOCK, toBlock: "latest",
-        }),
-        publicClient.getLogs({
-          address: SLA_CONTRACT_ADDRESS,
-          event: parseAbiItem("event SLABreached(uint256 indexed slaId, address indexed provider, uint256 uptimeBps, uint256 penaltyAmount)"),
-          fromBlock: DEPLOY_BLOCK, toBlock: "latest",
-        }),
-      ]);
-      setBreachWarnings(warningLogs.map(log => ({
-        slaId: log.args.slaId!, riskScore: log.args.riskScore!,
-        prediction: log.args.prediction!, blockNumber: log.blockNumber,
-      })));
-      setBreachEvents(breachLogs.map(log => ({
-        slaId: log.args.slaId!, provider: log.args.provider!,
-        uptimeBps: log.args.uptimeBps!, penaltyAmount: log.args.penaltyAmount!,
-        blockNumber: log.blockNumber, transactionHash: log.transactionHash,
-      })));
-    };
-    fetchEvents();
-  }, [publicClient]);
-
-  useWatchContractEvent({
-    address: SLA_CONTRACT_ADDRESS, abi: SLA_ABI, eventName: "BreachWarning",
-    onLogs(logs) {
-      const newWarnings = (logs as unknown as { args: { slaId: bigint; riskScore: bigint; prediction: string }; blockNumber: bigint }[])
-        .map(log => ({ slaId: log.args.slaId, riskScore: log.args.riskScore, prediction: log.args.prediction, blockNumber: log.blockNumber }));
-      setBreachWarnings(prev => {
-        const existingKeys = new Set(prev.map(w => `${w.slaId}-${w.blockNumber}`));
-        const fresh = newWarnings.filter(w => !existingKeys.has(`${w.slaId}-${w.blockNumber}`));
-        return fresh.length ? [...prev, ...fresh] : prev;
-      });
-    },
-    poll: true, pollingInterval: 5_000,
-  });
-
-  useWatchContractEvent({
-    address: SLA_CONTRACT_ADDRESS, abi: SLA_ABI, eventName: "SLABreached",
-    onLogs(logs) {
-      const newBreaches = (logs as unknown as { args: { slaId: bigint; provider: string; uptimeBps: bigint; penaltyAmount: bigint }; blockNumber: bigint; transactionHash: string }[])
-        .map(log => ({ slaId: log.args.slaId, provider: log.args.provider, uptimeBps: log.args.uptimeBps, penaltyAmount: log.args.penaltyAmount, blockNumber: log.blockNumber, transactionHash: log.transactionHash }));
-      setBreachEvents(prev => {
-        const existingHashes = new Set(prev.map(e => e.transactionHash));
-        const fresh = newBreaches.filter(b => !existingHashes.has(b.transactionHash));
-        return fresh.length ? [...fresh, ...prev] : prev;
-      });
-    },
-    poll: true, pollingInterval: 5_000,
-  });
-
-  const activeSLAs = slas.filter(s => s.active).length;
-  const totalBonded = slas.reduce((sum, s) => sum + Number(formatEther(s.bondAmount)), 0);
-  const breachCountNum = Number(breachCount ?? 0);
-
-  // All warnings sorted newest first (full history, can have multiple per SLA)
-  const allWarningsSorted = [...breachWarnings].sort((a, b) => Number(b.blockNumber) - Number(a.blockNumber));
-
-  // Set of SLA IDs that have been actually penalized (SLABreached events)
-  const penalizedSlaIds = new Set(breachEvents.map(e => Number(e.slaId)));
-
-  // Latest risk score per SLA (for badge on SLA cards)
-  const latestRiskScores = new Map<number, number>();
-  for (const w of allWarningsSorted) {
-    const id = Number(w.slaId);
-    if (!latestRiskScores.has(id)) latestRiskScores.set(id, Number(w.riskScore));
-  }
-
-  // SLAs sorted newest first (highest ID = most recently created)
-  const slasSorted = [...slas].reverse();
+  // SLAs already sorted desc from Ponder query
+  const slasSorted = slas;
 
   const SLA_PREVIEW = 4;
   const PREDICTION_PREVIEW = 6;
-  const isLoading = slaCount === undefined;
 
   if (isLoading) {
     return (
@@ -351,7 +212,7 @@ export default function Dashboard() {
         <StatCard label="Active SLAs" value={`${activeSLAs}`} subtitle="agreements enforced" />
         <StatCard label="Total Bonded" value={`${totalBonded.toFixed(2)} ETH`} subtitle="locked as collateral" />
         <StatCard label="Verdicts" value={`${allWarningsSorted.length}`} subtitle="tribunal predictions" />
-        <StatCard label="Breaches" value={`${breachCountNum}`} subtitle="penalties executed" />
+        <StatCard label="Breaches" value={`${breachCount}`} subtitle="penalties executed" />
       </motion.div>
 
       {/* Two-column: SLAs (left) + Predictions (right) */}
@@ -377,7 +238,7 @@ export default function Dashboard() {
           ) : (
             <div className="space-y-3">
               {slasSorted.slice(0, SLA_PREVIEW).map((sla) => {
-                const riskScore = latestRiskScores.get(sla.id);
+                const riskScore = latestRiskScores.get(Number(sla.slaId));
                 return (
                   <div
                     key={sla.id}
@@ -386,7 +247,7 @@ export default function Dashboard() {
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <div className="flex items-center gap-2.5">
-                          <span className="text-[12px] font-mono" style={{ color: "var(--muted)" }}>SLA #{sla.id}</span>
+                          <span className="text-[12px] font-mono" style={{ color: "var(--muted)" }}>SLA #{sla.slaId}</span>
                           <span
                             className="px-2 py-0.5 rounded-md text-[11px] font-medium"
                             style={{
@@ -406,13 +267,13 @@ export default function Dashboard() {
                         </p>
                       </div>
                       <Link
-                        href={`/sla/${sla.id}`}
+                        href={`/sla/${sla.slaId}`}
                         className="btn-primary px-4 py-2 text-[13px]"
                       >
                         View
                       </Link>
                     </div>
-                    <BondHealthBar bond={Number(formatEther(sla.bondAmount))} max={3} />
+                    <BondHealthBar bond={Number(formatEther(BigInt(sla.bondAmount)))} max={3} />
                   </div>
                 );
               })}
@@ -441,18 +302,19 @@ export default function Dashboard() {
           ) : (
             <div className="space-y-2">
               {allWarningsSorted.slice(0, PREDICTION_PREVIEW).map((w, i) => {
-                const { tally, summary } = parseTribunalPrediction(w.prediction);
+                const tally = w.tally || "";
+                const summary = w.summary || w.prediction;
                 return (
                   <div
                     key={`${w.slaId}-${w.blockNumber}-${i}`}
                     className="glass-card rounded-xl p-4"
                     style={{
-                      borderColor: Number(w.riskScore) > 70 ? "rgba(239,68,68,0.15)" : undefined,
+                      borderColor: w.riskScore > 70 ? "rgba(239,68,68,0.15)" : undefined,
                     }}
                   >
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="font-mono text-[12px]" style={{ color: "var(--muted)" }}>SLA #{Number(w.slaId)}</span>
-                      <RiskBadge score={Number(w.riskScore)} />
+                      <span className="font-mono text-[12px]" style={{ color: "var(--muted)" }}>SLA #{w.slaId}</span>
+                      <RiskBadge score={w.riskScore} />
                     </div>
                     {tally && (
                       <div className="mb-1.5">
@@ -469,7 +331,7 @@ export default function Dashboard() {
       </div>
 
       {/* Recent Breaches */}
-      {breachEvents.length > 0 && (
+      {breaches.length > 0 && (
         <div>
           <h2 className="text-[15px] font-semibold text-white mb-3">Recent Breaches</h2>
           <div className="glass-card rounded-2xl overflow-hidden">
@@ -482,7 +344,7 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {breachEvents.slice(0, 20).map((breach, i) => (
+                {breaches.slice(0, 20).map((breach, i) => (
                   <tr
                     key={`${breach.transactionHash}-${i}`}
                     style={{
@@ -490,11 +352,11 @@ export default function Dashboard() {
                       background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.015)",
                     }}
                   >
-                    <td className="px-4 py-3 text-white font-mono">#{Number(breach.slaId)}</td>
+                    <td className="px-4 py-3 text-white font-mono">#{breach.slaId}</td>
                     <td className="px-4 py-3 font-mono" style={{ color: "var(--muted-strong)" }}>{breach.provider.slice(0, 10)}...</td>
                     <td className="px-4 py-3 text-white">{Number(breach.uptimeBps) / 100}%</td>
-                    <td className="px-4 py-3 text-white">{formatEther(breach.penaltyAmount)} ETH</td>
-                    <td className="px-4 py-3" style={{ color: "var(--muted)" }}>{Number(breach.blockNumber)}</td>
+                    <td className="px-4 py-3 text-white">{formatEther(BigInt(breach.penaltyAmount))} ETH</td>
+                    <td className="px-4 py-3" style={{ color: "var(--muted)" }}>{breach.blockNumber}</td>
                     <td className="px-4 py-3 font-mono">
                       {TENDERLY_EXPLORER ? (
                         <a

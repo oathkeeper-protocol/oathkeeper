@@ -2,10 +2,10 @@
 
 import { use } from "react";
 import { motion } from "framer-motion";
-import { useReadContract, usePublicClient } from "wagmi";
-import { formatEther, parseAbiItem } from "viem";
-import { useEffect, useState } from "react";
-import { SLA_CONTRACT_ADDRESS, SLA_ABI, DEPLOY_BLOCK } from "@/lib/contract";
+import { formatEther } from "viem";
+import { useSLADetail } from "@/hooks/usePonderData";
+import { useReadContract } from "wagmi";
+import { SLA_CONTRACT_ADDRESS, SLA_ABI } from "@/lib/contract";
 import Link from "next/link";
 
 const fadeUp = {
@@ -16,61 +16,13 @@ const fadeUp = {
   }),
 };
 
-type BreachEvent = { uptimeBps: bigint; penaltyAmount: bigint; blockNumber: bigint; transactionHash: string };
-type ClaimEvent = { claimId: bigint; tenant: string; blockNumber: bigint; transactionHash: string };
-type WarningEvent = { riskScore: bigint; prediction: string; blockNumber: bigint };
-
 export default function SLADetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const slaId = BigInt(id);
-  const publicClient = usePublicClient();
-  const [breaches, setBreaches] = useState<BreachEvent[]>([]);
-  const [claims, setClaims] = useState<ClaimEvent[]>([]);
-  const [warnings, setWarnings] = useState<WarningEvent[]>([]);
-
-  const { data: slaRaw, isLoading } = useReadContract({
-    address: SLA_CONTRACT_ADDRESS, abi: SLA_ABI, functionName: "slas", args: [slaId],
-  });
+  const { sla: slaData, breaches, warnings, claims, isLoading } = useSLADetail(id);
 
   const { data: collateralRatio } = useReadContract({
-    address: SLA_CONTRACT_ADDRESS, abi: SLA_ABI, functionName: "getCollateralRatio", args: [slaId],
+    address: SLA_CONTRACT_ADDRESS, abi: SLA_ABI, functionName: "getCollateralRatio", args: [BigInt(id)],
   });
-
-  useEffect(() => {
-    if (!publicClient) return;
-    const fetchEvents = async () => {
-      const [breachLogs, claimLogs, warningLogs] = await Promise.all([
-        publicClient.getLogs({
-          address: SLA_CONTRACT_ADDRESS,
-          event: parseAbiItem("event SLABreached(uint256 indexed slaId, address indexed provider, uint256 uptimeBps, uint256 penaltyAmount)"),
-          args: { slaId }, fromBlock: DEPLOY_BLOCK, toBlock: "latest",
-        }),
-        publicClient.getLogs({
-          address: SLA_CONTRACT_ADDRESS,
-          event: parseAbiItem("event ClaimFiled(uint256 indexed claimId, uint256 indexed slaId, address tenant)"),
-          args: { slaId }, fromBlock: DEPLOY_BLOCK, toBlock: "latest",
-        }),
-        publicClient.getLogs({
-          address: SLA_CONTRACT_ADDRESS,
-          event: parseAbiItem("event BreachWarning(uint256 indexed slaId, uint256 riskScore, string prediction)"),
-          args: { slaId }, fromBlock: DEPLOY_BLOCK, toBlock: "latest",
-        }),
-      ]);
-      setBreaches(breachLogs.map(log => ({
-        uptimeBps: log.args.uptimeBps!, penaltyAmount: log.args.penaltyAmount!,
-        blockNumber: log.blockNumber, transactionHash: log.transactionHash,
-      })).reverse());
-      setClaims(claimLogs.map(log => ({
-        claimId: log.args.claimId!, tenant: log.args.tenant!,
-        blockNumber: log.blockNumber, transactionHash: log.transactionHash,
-      })).reverse());
-      setWarnings(warningLogs.map(log => ({
-        riskScore: log.args.riskScore!, prediction: log.args.prediction!,
-        blockNumber: log.blockNumber,
-      })).reverse());
-    };
-    fetchEvents();
-  }, [publicClient, slaId]);
 
   if (isLoading) {
     return (
@@ -80,7 +32,7 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
     );
   }
 
-  if (!slaRaw) {
+  if (!slaData) {
     return (
       <div className="max-w-2xl mx-auto text-center py-20">
         <p style={{ color: "var(--muted)" }}>SLA #{id} not found.</p>
@@ -89,9 +41,9 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
     );
   }
 
-  const [provider, tenant, serviceName, bondAmount, responseTimeHrs, minUptimeBps, penaltyBps, createdAt, active] = slaRaw as readonly [string, string, string, bigint, bigint, bigint, bigint, bigint, boolean];
-  const bondEth = Number(formatEther(bondAmount));
-  const totalSlashed = breaches.reduce((sum, b) => sum + Number(formatEther(b.penaltyAmount)), 0);
+  const { provider, tenant, serviceName, bondAmount, responseTimeHrs, minUptimeBps, penaltyBps, active, createdAt } = slaData;
+  const bondEth = Number(bondAmount) / 1e18;
+  const totalSlashed = breaches.reduce((sum, b) => sum + Number(b.penaltyAmount) / 1e18, 0);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -119,7 +71,7 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
               { label: "Min Uptime", value: `${Number(minUptimeBps) / 100}%` },
               { label: "Penalty Rate", value: `${Number(penaltyBps) / 100}%` },
               { label: "Response Time", value: `${Number(responseTimeHrs)}h` },
-              { label: "Created", value: new Date(Number(createdAt) * 1000).toLocaleString() },
+              { label: "Created", value: new Date(createdAt).toLocaleString() },
               ...(collateralRatio !== undefined ? [{ label: "Collateral (USD)", value: `$${Number(collateralRatio).toLocaleString()}` }] : []),
             ].map(({ label, value, mono }) => (
               <div key={label}>
@@ -154,10 +106,10 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
                   <div>
                     <p className="text-[13px] text-white font-medium">Uptime: {Number(b.uptimeBps) / 100}%</p>
                     <p className="text-[11px] font-mono mt-0.5" style={{ color: "var(--muted)" }}>
-                      Block {Number(b.blockNumber)} · {b.transactionHash.slice(0, 14)}...
+                      Block {b.blockNumber} · {b.transactionHash.slice(0, 14)}...
                     </p>
                   </div>
-                  <p className="font-mono text-[13px] text-white">{formatEther(b.penaltyAmount)} ETH</p>
+                  <p className="font-mono text-[13px] text-white">{formatEther(BigInt(b.penaltyAmount))} ETH</p>
                 </div>
               ))}
             </div>
@@ -170,9 +122,8 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
             <h2 className="text-[15px] font-semibold text-white mb-3">AI Tribunal History</h2>
             <div className="space-y-2">
               {warnings.map((w, i) => {
-                const match = w.prediction.match(/^\[([^\]]+)\]\s*(.*)/);
-                const tally = match ? match[1] : "";
-                const summary = match ? match[2] : w.prediction;
+                const tally = w.tally || "";
+                const summary = w.summary || w.prediction;
                 const isBreach = tally.includes("BREACH");
                 const isClear = tally.includes("CLEAR");
                 const penalized = breaches.length > 0;
@@ -191,7 +142,7 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
                         {votes} {label}
                       </span>
                       <span className="text-[11px] font-mono" style={{ color: "var(--muted)" }}>
-                        Risk: {Number(w.riskScore)} · Block {Number(w.blockNumber)}
+                        Risk: {w.riskScore} · Block {w.blockNumber}
                       </span>
                     </div>
                     <p className="text-[12px] leading-relaxed" style={{ color: "var(--muted-strong)" }}>{summary}</p>
@@ -209,9 +160,9 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
             <div className="space-y-2">
               {claims.map((c) => (
                 <div key={c.transactionHash} className="glass-card rounded-xl p-4">
-                  <p className="text-[13px] text-white">Claim #{Number(c.claimId)}</p>
+                  <p className="text-[13px] text-white">Claim #{c.claimId}</p>
                   <p className="text-[11px] font-mono mt-0.5" style={{ color: "var(--muted)" }}>
-                    Tenant: {c.tenant.slice(0, 20)}... · Block {Number(c.blockNumber)}
+                    Tenant: {c.tenant.slice(0, 20)}... · Block {c.blockNumber}
                   </p>
                 </div>
               ))}

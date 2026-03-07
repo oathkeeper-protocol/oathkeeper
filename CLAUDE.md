@@ -23,6 +23,7 @@ World Chain (4801)          CRE Workflows              Sepolia (Tenderly VNet)
 | Contracts | `contracts/` | Foundry, Solidity ^0.8.20 |
 | CRE Workflow | `workflow/` | Chainlink CRE SDK, TypeScript |
 | Mock API | `workflow/mock-api/` | Express, TypeScript |
+| Indexer | `indexer/` | Ponder v0.12, Hono, GraphQL |
 | Dashboard | `dashboard/` | Next.js 14, wagmi, viem, RainbowKit |
 | Mini App | `miniapp/` | Next.js, World Mini App SDK |
 
@@ -50,6 +51,9 @@ cd workflow && npm install && cre workflow simulate --verbose
 # Mock API
 cd workflow/mock-api && npm run dev
 
+# Indexer
+cd indexer && npm install && npm run dev  # GraphQL at :42069/graphql
+
 # Dashboard
 cd dashboard && npm install && npm run dev
 ```
@@ -58,20 +62,26 @@ cd dashboard && npm install && npm run dev
 
 - Solidity: Foundry style, `require()` strings for errors (not custom errors — hackathon simplicity)
 - TypeScript: CRE SDK patterns — `runtime.runInNodeMode()` for consensus, `.result()` for sync unwrap
-- Dashboard: wagmi hooks, `useReadContracts` multicall for batch reads, `getLogs` on mount for history + `useWatchContractEvent` (5s poll) for real-time (no duplicate 30s interval)
-- Dashboard events: deduplicated by blockNumber/txHash in `useWatchContractEvent` handlers
-- Production note: `getLogs` works at demo scale but would be replaced by a subgraph (The Graph) or indexer (Ponder/Envio) for production — avoids block scanning, adds caching, enables complex queries
+- Indexer: Ponder event handlers in `src/index.ts`, schema in `ponder.schema.ts`, GraphQL API in `src/api/index.ts`
+- Dashboard: data fetched from Ponder GraphQL via `hooks/usePonderData.ts` (5s poll). `lib/ponder.ts` has typed queries. `getCollateralRatio` still uses wagmi (not indexed).
+- Ponder returns strings for bigint fields — wrap with `BigInt()` for `formatEther()`
 - Tests: Foundry `vm.prank`/`vm.expectRevert`/`vm.warp` patterns
 - Access control: `onlyCREForwarder` modifier for all CRE-callable functions
 - Compliance: `ComplianceStatus` enum (NONE=0, APPROVED=1, REJECTED=2), rejection is permanent
 
 ## Environment Variables
 
+### Indexer (.env.local)
+- `PONDER_RPC_URL` — Tenderly VNet RPC
+- `SLA_CONTRACT_ADDRESS` — SLAEnforcement address
+- `DEPLOYMENT_BLOCK` — Contract deploy block
+
 ### Dashboard (.env.local)
 - `NEXT_PUBLIC_SLA_CONTRACT_ADDRESS` — SLAEnforcement address
 - `NEXT_PUBLIC_RPC_URL` — Tenderly VNet RPC
 - `NEXT_PUBLIC_WLD_APP_ID` — World ID app ID
-- `NEXT_PUBLIC_DEPLOY_BLOCK` — Contract deploy block (for getLogs fromBlock)
+- `NEXT_PUBLIC_DEPLOY_BLOCK` — Contract deploy block
+- `NEXT_PUBLIC_PONDER_URL` — Ponder GraphQL endpoint (default: `http://localhost:42069`)
 
 ### Mock API
 - `DEMO_REJECT_ADDRESS` — Address to reject in compliance check (demo)
