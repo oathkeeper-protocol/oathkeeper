@@ -134,9 +134,20 @@ oathlayer/
 
 ---
 
+## Prerequisites
+
+| Tool | Install |
+|------|---------|
+| **Node.js** ≥ 18 | [nodejs.org](https://nodejs.org) |
+| **Bun** | `curl -fsSL https://bun.sh/install \| bash` |
+| **CRE CLI** | `curl -sSL https://cre.chain.link/install.sh \| bash` |
+| **Foundry** | `curl -L https://foundry.paradigm.xyz \| bash && foundryup` |
+
+After installing CRE CLI, run `cre login` to authenticate (requires free Chainlink account).
+
 ## Setup
 
-### Contracts
+### 1. Contracts
 
 ```bash
 cd contracts
@@ -151,43 +162,26 @@ forge script script/DeploySLA.s.sol --rpc-url $TENDERLY_RPC_URL --broadcast
 forge script script/DeployWorldChain.s.sol --rpc-url $WORLD_CHAIN_RPC --broadcast
 ```
 
-### CRE Workflow
+### 2. Mock API
 
-```bash
-cd workflow
-npm install
-
-# Secrets are loaded from workflow/.env during simulation
-# For deployed workflows, use: cre secrets create secrets.yaml
-
-# Simulate
-cre workflow simulate --verbose --broadcast
-```
-
-### Mock API
+Start this first — the CRE workflow and dashboard depend on it.
 
 ```bash
 cd workflow/mock-api
 npm install
 npm run dev  # runs on :3001
-
-# Trigger breach
-curl -X POST http://localhost:3001/set-uptime \
-  -H "Content-Type: application/json" \
-  -H "x-admin-token: demo-secret" \
-  -d '{"uptime": 98.0}'
 ```
 
-### Dashboard
+### 3. Dashboard
 
 ```bash
 cd dashboard
 npm install
-cp .env.local.example .env.local
+cp .env.local.example .env.local  # set NEXT_PUBLIC_SLA_CONTRACT_ADDRESS, RPC_URL, etc.
 npm run dev  # runs on :3000
 ```
 
-### Mini App
+### 4. Mini App (optional — requires World App on mobile)
 
 ```bash
 cd miniapp
@@ -196,6 +190,56 @@ npm run dev  # runs on :3002
 # Tunnel: cloudflared tunnel run oathlayer-miniapp
 # Access via World App: https://oathlayer-miniapp.robbyn.xyz
 ```
+
+### 5. CRE Workflow
+
+```bash
+cd workflow
+npm install
+bun run node_modules/@chainlink/cre-sdk-javy-plugin/bin/setup.ts  # first time only — downloads Javy WASM compiler
+```
+
+**Run simulation** (from project root):
+```bash
+# Export secrets (or add to root .env)
+export UPTIME_API_KEY="demo-secret"
+export COMPLIANCE_API_KEY="demo-secret"
+export GROQ_API_KEY="your-groq-api-key"
+
+# Dry run — no on-chain writes
+cre workflow simulate ./workflow --target local-simulation --non-interactive --trigger-index 0
+
+# Broadcast — writes breach/warning txs to chain
+cre workflow simulate ./workflow --target local-simulation --non-interactive --trigger-index 0 --broadcast
+```
+
+**Trigger index reference:**
+
+| Index | Trigger | Description |
+|-------|---------|-------------|
+| 0 | Cron | Scan all SLAs + AI Tribunal (main flow) |
+| 1 | ClaimFiled log | React to tenant claim on Sepolia |
+
+> **Note:** World Chain log triggers (provider/arbitrator registration) are disabled in `config.local.json` for local simulation because the CRE simulator doesn't support World Chain's chain selector. They work in deployed workflows.
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `project.yaml` | RPC endpoints (Tenderly VNet Sepolia + World Chain) |
+| `workflow/workflow.yaml` | Workflow name, entry point, config/secrets paths, target settings |
+| `workflow/config.local.json` | Runtime config: contract addresses, API URLs, chain selectors |
+| `secrets.yaml` | Maps secret names → env var names (values loaded from `.env` or exported vars) |
+| `.env` (root) | Secret values for simulation: `UPTIME_API_KEY`, `COMPLIANCE_API_KEY`, `GROQ_API_KEY`, `CRE_ETH_PRIVATE_KEY` |
+
+### Running All Services Locally
+
+| Terminal | Command | Port |
+|----------|---------|------|
+| 1 | `cd workflow/mock-api && npm run dev` | `:3001` |
+| 2 | `cd dashboard && npm run dev` | `:3000` |
+| 3 | `cd miniapp && npm run dev` (optional) | `:3002` |
+| 4 | CRE simulate commands (see above) | — |
 
 ---
 
@@ -260,33 +304,42 @@ This pattern demonstrates CRE as a general-purpose cross-chain bridge for identi
 ### Quick Test (No World ID Required)
 
 ```bash
-# 1. Start services
-cd workflow/mock-api && npm run dev        # :3001
-cd dashboard && npm run dev                # :3000
+# 1. Start mock API (terminal 1)
+cd workflow/mock-api && npm run dev
 
-# 2. Fund wallet + register provider via Tenderly impersonation
-cast rpc tenderly_setBalance <YOUR_ADDRESS> 0x56BC75E2D63100000 \
-  --rpc-url $TENDERLY_RPC_URL
+# 2. Start dashboard (terminal 2)
+cd dashboard && npm run dev
 
-cast send $SLA_CONTRACT "registerProviderRelayed(address,uint256)" \
-  <YOUR_ADDRESS> 12345 \
-  --rpc-url $TENDERLY_RPC_URL \
-  --from $CRE_FORWARDER --unlocked
+# 3. Fund wallet + register provider via Tenderly impersonation (terminal 3)
+export TENDERLY_RPC=https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d
+export SLA=0x8286A8cfA5c8C1872097D9b43E01CbdEe934D319
+export CRE_FWD=0x4B2fF22FFeb81292F8511a8eB370C4F7Aa656d9B
 
-cast send $SLA_CONTRACT "setComplianceStatus(address,uint8)" \
-  <YOUR_ADDRESS> 1 \
-  --rpc-url $TENDERLY_RPC_URL \
-  --from $CRE_FORWARDER --unlocked
+cast rpc tenderly_setBalance <YOUR_ADDRESS> 0x56BC75E2D63100000 --rpc-url $TENDERLY_RPC
 
-# 3. Create SLA on dashboard → /sla/create
-# 4. Force breach
+cast send $SLA "registerProviderRelayed(address,uint256)" \
+  <YOUR_ADDRESS> 12345 --rpc-url $TENDERLY_RPC --from $CRE_FWD --unlocked
+
+cast send $SLA "setComplianceStatus(address,uint8)" \
+  <YOUR_ADDRESS> 1 --rpc-url $TENDERLY_RPC --from $CRE_FWD --unlocked
+
+# 4. Create SLA on dashboard → /sla/create
+
+# 5. Run CRE scan (healthy state — all SLAs should be CLEAR)
+export UPTIME_API_KEY=demo-secret COMPLIANCE_API_KEY=demo-secret GROQ_API_KEY=your-key
+cre workflow simulate ./workflow --target local-simulation --non-interactive --trigger-index 0
+
+# 6. Force breach — drop uptime to 90%
 curl -X POST http://localhost:3001/set-uptime \
   -H "x-admin-token: demo-secret" \
   -H "Content-Type: application/json" \
   -d '{"uptime": 90.0}'
 
-# 5. Run CRE workflow
-cd workflow && cre workflow simulate --verbose --broadcast
+# 7. Run CRE scan again — tribunal should vote BREACH, bond gets slashed
+cre workflow simulate ./workflow --target local-simulation --non-interactive --trigger-index 0 --broadcast
+
+# 8. Reset uptime
+curl -X POST http://localhost:3001/reset -H "x-admin-token: demo-secret"
 ```
 
 ---

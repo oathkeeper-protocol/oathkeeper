@@ -1,0 +1,14 @@
+# ==========================================================================
+local-simulation:
+  user-workflow:
+    workflow-name: "oathlayer-sla-enforcement"
+  workflow-artifacts:
+    workflow-path: "./workflow.ts"
+    config-path: "./config.local.json"
+    secrets-path: "../secrets.yaml"
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d
+    - chain-name: ethereum-testnet-sepolia-worldchain-1
+      url: https://virtual.worldchain-sepolia.eu.rpc.tenderly.co/d8f04de9-4cc1-4066-b8d3-31ed51ee1d85
+# ==========================================================================

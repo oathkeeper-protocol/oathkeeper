@@ -38,8 +38,8 @@ const configSchema = z.object({
   uptimeApiUrl: z.string().describe("Base URL for uptime API"),
   complianceApiUrl: z.string().describe("Base URL for compliance API (mock at :3001)"),
   chainSelectorName: z.string(),
-  worldChainContractAddress: z.string().describe("WorldChainRegistry address on World Chain"),
-  worldChainSelector: z.string().describe("CCIP chain selector for World Chain mainnet (default: 11820315825706515952)"),
+  worldChainContractAddress: z.string().default("").describe("WorldChainRegistry address on World Chain (empty to skip World Chain triggers)"),
+  worldChainSelector: z.string().default("").describe("CCIP chain selector for World Chain (empty to skip World Chain triggers)"),
 });
 
 type Config = z.infer<typeof configSchema>;
@@ -778,11 +778,6 @@ const initWorkflow = (config: Config) => {
   const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
   const contractAddress = getAddress(config.slaContractAddress) as Address;
 
-  // World Chain EVMClient — uses chain selector from config (operator-set at deployment)
-  const worldChainSelector = BigInt(config.worldChainSelector);
-  const worldChainClient = new cre.capabilities.EVMClient(worldChainSelector);
-  const worldChainContractAddress = getAddress(config.worldChainContractAddress) as Address;
-
   // Cron: every 15 minutes
   const cron = new cre.capabilities.CronCapability();
   const cronTrigger = cron.trigger({ schedule: "0 */15 * * * *" });
@@ -799,40 +794,51 @@ const initWorkflow = (config: Config) => {
     ],
   });
 
-  // World Chain EVM Log: ProviderRegistrationRequested(address indexed user, uint256 indexed nullifierHash, uint256 root, uint256 timestamp)
-  const providerRegistrationTopic = keccak256(
-    toBytes("ProviderRegistrationRequested(address,uint256,uint256,uint256)")
-  );
-  const providerRegistrationTrigger = worldChainClient.logTrigger({
-    addresses: [toHex(toBytes(worldChainContractAddress, { size: 20 }))],
-    topics: [
-      { values: [providerRegistrationTopic] },
-      { values: [] }, // user (indexed)
-      { values: [] }, // nullifierHash (indexed)
-      { values: [] },
-    ],
-  });
-
-  // World Chain EVM Log: ArbitratorRegistrationRequested(address indexed user, uint256 indexed nullifierHash, uint256 root, uint256 timestamp)
-  const arbitratorRegistrationTopic = keccak256(
-    toBytes("ArbitratorRegistrationRequested(address,uint256,uint256,uint256)")
-  );
-  const arbitratorRegistrationTrigger = worldChainClient.logTrigger({
-    addresses: [toHex(toBytes(worldChainContractAddress, { size: 20 }))],
-    topics: [
-      { values: [arbitratorRegistrationTopic] },
-      { values: [] }, // user (indexed)
-      { values: [] }, // nullifierHash (indexed)
-      { values: [] },
-    ],
-  });
-
-  return [
+  const handlers: ReturnType<typeof cre.handler>[] = [
     cre.handler(cronTrigger, onCronTrigger),
     cre.handler(logTrigger, onClaimFiled),
-    cre.handler(providerRegistrationTrigger, onProviderRegistrationRequested),
-    cre.handler(arbitratorRegistrationTrigger, onArbitratorRegistrationRequested),
   ];
+
+  // World Chain triggers — only register when worldChainSelector is configured
+  // Set worldChainSelector to "" in config.local.json to skip (for simulation)
+  if (config.worldChainSelector && config.worldChainContractAddress) {
+    const worldChainSelector = BigInt(config.worldChainSelector);
+    const worldChainClient = new cre.capabilities.EVMClient(worldChainSelector);
+    const worldChainContractAddress = getAddress(config.worldChainContractAddress) as Address;
+
+    const providerRegistrationTopic = keccak256(
+      toBytes("ProviderRegistrationRequested(address,uint256,uint256,uint256)")
+    );
+    const providerRegistrationTrigger = worldChainClient.logTrigger({
+      addresses: [toHex(toBytes(worldChainContractAddress, { size: 20 }))],
+      topics: [
+        { values: [providerRegistrationTopic] },
+        { values: [] },
+        { values: [] },
+        { values: [] },
+      ],
+    });
+
+    const arbitratorRegistrationTopic = keccak256(
+      toBytes("ArbitratorRegistrationRequested(address,uint256,uint256,uint256)")
+    );
+    const arbitratorRegistrationTrigger = worldChainClient.logTrigger({
+      addresses: [toHex(toBytes(worldChainContractAddress, { size: 20 }))],
+      topics: [
+        { values: [arbitratorRegistrationTopic] },
+        { values: [] },
+        { values: [] },
+        { values: [] },
+      ],
+    });
+
+    handlers.push(
+      cre.handler(providerRegistrationTrigger, onProviderRegistrationRequested),
+      cre.handler(arbitratorRegistrationTrigger, onArbitratorRegistrationRequested),
+    );
+  }
+
+  return handlers;
 };
 
 // --- Entry point ---

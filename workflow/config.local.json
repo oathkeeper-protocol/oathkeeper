@@ -1,0 +1,8 @@
+{
+  "slaContractAddress": "0x8286A8cfA5c8C1872097D9b43E01CbdEe934D319",
+  "uptimeApiUrl": "http://localhost:3001",
+  "complianceApiUrl": "http://localhost:3001",
+  "chainSelectorName": "ethereum-testnet-sepolia",
+  "worldChainContractAddress": "",
+  "worldChainSelector": ""
+}

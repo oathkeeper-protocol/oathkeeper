@@ -85,7 +85,7 @@ Imagine a **cloud hosting company** (AWS, Hetzner, etc.) that tokenizes its infr
 
 ## Demo Script for Judges
 
-> **Pre-demo setup:** Mock API running on `:3001`, Dashboard on `:3000`, CRE workflow ready to simulate.
+> **Pre-demo setup:** Mock API running on `:3001`, Dashboard on `:3000`, secrets exported (`UPTIME_API_KEY`, `COMPLIANCE_API_KEY`, `GROQ_API_KEY`), CRE CLI authenticated (`cre login`).
 
 ### Act 1: The Product (30s)
 
@@ -109,9 +109,9 @@ curl -X POST http://localhost:3001/set-uptime \
 ```
 Say: *"Simulating an outage — the provider's uptime just dropped to 94%."*
 
-**Step 3 — Run CRE workflow**
+**Step 3 — Run CRE workflow** (from project root)
 ```bash
-cd workflow && cre workflow simulate --verbose --broadcast
+cre workflow simulate ./workflow --target local-simulation --non-interactive --trigger-index 0 --broadcast
 ```
 Say: *"Chainlink CRE is now doing 3 things: fetching uptime data, running it through a 3-agent AI Tribunal — Risk Analyst, Provider Advocate, and Enforcement Judge deliberate adversarially — and if the tribunal votes breach, the bond is slashed on-chain automatically."*
 
@@ -160,5 +160,5 @@ curl -X POST http://localhost:3001/reset \
 | Drop specific provider | `curl -X POST localhost:3001/set-provider-uptime -H "Content-Type: application/json" -H "x-admin-token: demo-secret" -d '{"address": "0x...", "uptime": 92.0}'` |
 | Reset to healthy | `curl -X POST localhost:3001/reset -H "x-admin-token: demo-secret"` |
 | Check current state | `curl localhost:3001/status` |
-| Run CRE (dry run) | `cd workflow && cre workflow simulate --verbose` |
-| Run CRE (broadcast) | `cd workflow && cre workflow simulate --verbose --broadcast` |
+| Run CRE (dry run) | `cre workflow simulate ./workflow --target local-simulation --non-interactive --trigger-index 0` |
+| Run CRE (broadcast) | `cre workflow simulate ./workflow --target local-simulation --non-interactive --trigger-index 0 --broadcast` |
