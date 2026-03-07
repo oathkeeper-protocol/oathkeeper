@@ -273,7 +273,7 @@ export default function Dashboard() {
                         View
                       </Link>
                     </div>
-                    <BondHealthBar bond={Number(formatEther(BigInt(sla.bondAmount)))} max={3} />
+                    <BondHealthBar bond={(Number(sla.bondAmount) - Number(sla.totalSlashed)) / 1e18} max={Number(sla.bondAmount) / 1e18} />
                   </div>
                 );
               })}

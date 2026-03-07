@@ -82,13 +82,13 @@ export async function fetchDashboardData() {
         createdAt blockNumber
       }
     }
-    breachs(orderBy: "blockNumber", orderDirection: "desc") {
+    breachs {
       items {
         id slaId provider uptimeBps penaltyAmount
         blockNumber transactionHash
       }
     }
-    breachWarnings(orderBy: "blockNumber", orderDirection: "desc") {
+    breachWarnings {
       items {
         id slaId riskScore prediction tally summary penalized
         blockNumber transactionHash
@@ -98,36 +98,35 @@ export async function fetchDashboardData() {
 }
 
 export async function fetchSLADetail(slaId: string) {
+  const slaIdBigInt = slaId;
   return gql<{
     sla: PonderSLA | null;
     breachs: { items: PonderBreach[] };
     breachWarnings: { items: PonderWarning[] };
     claims: { items: PonderClaim[] };
-  }>(`
-    query SLADetail($slaId: BigInt!) {
-      sla(id: "${slaId}") {
-        id slaId provider tenant serviceName bondAmount
-        responseTimeHrs minUptimeBps penaltyBps active
-        breachCount totalSlashed latestRiskScore latestVerdict
-        createdAt blockNumber
-      }
-      breachs(where: { slaId: $slaId }, orderBy: "blockNumber", orderDirection: "desc") {
-        items {
-          id slaId provider uptimeBps penaltyAmount
-          blockNumber transactionHash
-        }
-      }
-      breachWarnings(where: { slaId: $slaId }, orderBy: "blockNumber", orderDirection: "desc") {
-        items {
-          id slaId riskScore prediction tally summary penalized
-          blockNumber transactionHash
-        }
-      }
-      claims(where: { slaId: $slaId }, orderBy: "blockNumber", orderDirection: "desc") {
-        items {
-          id claimId slaId tenant blockNumber transactionHash
-        }
+  }>(`{
+    sla(id: "${slaId}") {
+      id slaId provider tenant serviceName bondAmount
+      responseTimeHrs minUptimeBps penaltyBps active
+      breachCount totalSlashed latestRiskScore latestVerdict
+      createdAt blockNumber
+    }
+    breachs(where: { slaId: "${slaIdBigInt}" }) {
+      items {
+        id slaId provider uptimeBps penaltyAmount
+        blockNumber transactionHash
       }
     }
-  `, { slaId });
+    breachWarnings(where: { slaId: "${slaIdBigInt}" }) {
+      items {
+        id slaId riskScore prediction tally summary penalized
+        blockNumber transactionHash
+      }
+    }
+    claims(where: { slaId: "${slaIdBigInt}" }) {
+      items {
+        id claimId slaId tenant blockNumber transactionHash
+      }
+    }
+  }`);
 }

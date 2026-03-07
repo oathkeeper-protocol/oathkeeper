@@ -140,6 +140,7 @@ function DemoControls({ onExit }: { onExit: () => void }) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  const [uptime, setUptime] = useState("94.0");
 
   const callDemo = useCallback(async (action: string, params?: Record<string, unknown>) => {
     setLoading(action);
@@ -151,9 +152,13 @@ function DemoControls({ onExit }: { onExit: () => void }) {
         body: JSON.stringify({ action, ...params }),
       });
       const data = await res.json();
-      setStatus(data.message || data.error || JSON.stringify(data));
-    } catch (e: any) {
-      setStatus(`Error: ${e.message}`);
+      if (res.status === 502) {
+        setStatus("Mock API not running. Start it: cd workflow/mock-api && npm run dev");
+      } else {
+        setStatus(data.message || data.error || JSON.stringify(data));
+      }
+    } catch (e: unknown) {
+      setStatus("Mock API not running. Start it: cd workflow/mock-api && npm run dev");
     } finally {
       setLoading(null);
     }
@@ -183,13 +188,35 @@ function DemoControls({ onExit }: { onExit: () => void }) {
               </button>
             </div>
             <div className="space-y-2">
+              {/* Uptime input */}
+              <div className="flex items-center gap-2">
+                <label className="text-[11px] font-medium shrink-0" style={{ color: "var(--muted)" }}>Uptime %</label>
+                <input
+                  type="number"
+                  value={uptime}
+                  onChange={e => setUptime(e.target.value)}
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  className="flex-1 py-1.5 px-2 rounded-lg text-[12px] font-mono text-white bg-transparent outline-none"
+                  style={{ border: "1px solid var(--card-border)" }}
+                />
+              </div>
               <button
-                onClick={() => callDemo("demo-breach", { uptime: 94.0 })}
+                onClick={() => callDemo("set-uptime", { uptime: parseFloat(uptime) })}
+                disabled={!!loading}
+                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
+                style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b" }}
+              >
+                {loading === "set-uptime" ? "Setting..." : `Set Uptime → ${uptime}%`}
+              </button>
+              <button
+                onClick={() => callDemo("demo-breach", { uptime: parseFloat(uptime) })}
                 disabled={!!loading}
                 className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
                 style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
               >
-                {loading === "demo-breach" ? "Triggering..." : "Trigger Breach (94% uptime)"}
+                {loading === "demo-breach" ? "Triggering..." : `Trigger Breach (${uptime}%)`}
               </button>
               <button
                 onClick={() => callDemo("trigger-scan")}
@@ -200,12 +227,12 @@ function DemoControls({ onExit }: { onExit: () => void }) {
                 {loading === "trigger-scan" ? "Scanning..." : "Run CRE Scan"}
               </button>
               <button
-                onClick={() => callDemo("reset")}
+                onClick={() => { setUptime("99.9"); callDemo("reset"); }}
                 disabled={!!loading}
                 className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
                 style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--card-border)", color: "var(--muted-strong)" }}
               >
-                {loading === "reset" ? "Resetting..." : "Reset to Healthy"}
+                {loading === "reset" ? "Resetting..." : "Reset to Healthy (99.9%)"}
               </button>
             </div>
             {status && (
