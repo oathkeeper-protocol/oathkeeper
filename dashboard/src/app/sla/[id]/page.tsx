@@ -78,7 +78,7 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
     );
   }
 
-  const [provider, tenant, bondAmount, responseTimeHrs, minUptimeBps, penaltyBps, createdAt, active] = slaRaw as readonly [string, string, bigint, bigint, bigint, bigint, bigint, boolean];
+  const [provider, tenant, serviceName, bondAmount, responseTimeHrs, minUptimeBps, penaltyBps, createdAt, active] = slaRaw as readonly [string, string, string, bigint, bigint, bigint, bigint, bigint, boolean];
   const bondEth = Number(formatEther(bondAmount));
   const totalSlashed = breaches.reduce((sum, b) => sum + Number(formatEther(b.penaltyAmount)), 0);
 
@@ -87,7 +87,7 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
       <motion.div initial="hidden" animate="visible" className="space-y-6">
         <motion.div custom={0} variants={fadeUp} className="flex items-center gap-3">
           <Link href="/dashboard" className="text-[13px] transition-colors" style={{ color: "var(--muted)" }} onMouseEnter={e => e.currentTarget.style.color = "#fff"} onMouseLeave={e => e.currentTarget.style.color = "var(--muted)"}>← Dashboard</Link>
-          <h1 className="text-2xl md:text-3xl font-semibold text-white tracking-tight">SLA #{id}</h1>
+          <h1 className="text-2xl md:text-3xl font-semibold text-white tracking-tight">{serviceName || `SLA #${id}`}</h1>
           <span className="px-2.5 py-1 rounded-md text-[11px] font-medium" style={{
             color: active ? "rgba(74,222,128,0.8)" : "rgba(239,68,68,0.7)",
             background: active ? "rgba(74,222,128,0.08)" : "rgba(239,68,68,0.08)",
@@ -101,6 +101,7 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
           <h2 className="text-[15px] font-semibold text-white">Agreement Details</h2>
           <div className="grid grid-cols-2 gap-4 text-[13px]">
             {[
+              { label: "Service", value: serviceName || "N/A" },
               { label: "Provider", value: provider, mono: true },
               { label: "Tenant", value: tenant, mono: true },
               { label: "Bond Amount", value: `${bondEth.toFixed(4)} ETH` },

@@ -59,6 +59,7 @@ const SLA_ABI = [
     outputs: [
       { internalType: "address", name: "provider", type: "address" },
       { internalType: "address", name: "tenant", type: "address" },
+      { internalType: "string", name: "serviceName", type: "string" },
       { internalType: "uint256", name: "bondAmount", type: "uint256" },
       { internalType: "uint256", name: "responseTimeHrs", type: "uint256" },
       { internalType: "uint256", name: "minUptimeBps", type: "uint256" },
@@ -335,6 +336,7 @@ function readSlaCount(
 type SLAData = {
   provider: Address;
   tenant: Address;
+  serviceName: string;
   bondAmount: bigint;
   minUptimeBps: bigint;
   penaltyBps: bigint;
@@ -357,15 +359,16 @@ function readSla(
     abi: SLA_ABI,
     functionName: "slas",
     data: bytesToHex(reply.data),
-  }) as readonly [Address, Address, bigint, bigint, bigint, bigint, bigint, boolean];
+  }) as readonly [Address, Address, string, bigint, bigint, bigint, bigint, bigint, boolean];
 
   return {
     provider: result[0],
     tenant: result[1],
-    bondAmount: result[2],
-    minUptimeBps: result[4],
-    penaltyBps: result[5],
-    active: result[7],
+    serviceName: result[2],
+    bondAmount: result[3],
+    minUptimeBps: result[5],
+    penaltyBps: result[6],
+    active: result[8],
   };
 }
 
@@ -410,6 +413,7 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
   runtime.log(`[OathLayer] Checking ${slaCount} SLAs`);
 
   let breachCount = 0;
+  const breachedInLoop = new Set<number>();
 
   // Collect active SLA metrics for batched AI Tribunal deliberation
   const activeSLAMetrics: { slaId: number; provider: Address; uptimeBps: number; minUptimeBps: number }[] = [];
@@ -446,6 +450,7 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
     if (uptimeBps < minUptimeBps) {
       runtime.log(`[OathLayer] BREACH SLA ${i}: ${uptimeBps} < ${minUptimeBps} — slashing bond`);
       writeBreach(runtime, evmClient, contractAddress, i, uptimeBps);
+      breachedInLoop.add(i);
       breachCount++;
     }
 
@@ -564,8 +569,8 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
 
         runtime.log(`[OathLayer] Tribunal SLA ${metric.slaId}: ${verdict.tally} (confidence: ${verdict.councilConfidence})`);
 
-        if (verdict.action === "BREACH") {
-          // Unanimous breach — record breach (slashing)
+        if (verdict.action === "BREACH" && !breachedInLoop.has(metric.slaId)) {
+          // Unanimous breach — record breach (slashing), skip if already breached in hard-check
           runtime.log(`[OathLayer] TRIBUNAL BREACH SLA ${metric.slaId}: unanimous — slashing bond`);
           writeBreach(runtime, evmClient, contractAddress, metric.slaId, metric.uptimeBps);
           breachCount++;

@@ -8,6 +8,15 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { SLA_CONTRACT_ADDRESS, SLA_ABI } from "@/lib/contract";
 import Link from "next/link";
 
+const SERVICE_PRESETS = [
+  { label: "Cloud Hosting", defaults: { minUptime: 99.9, responseTimeHrs: 4, penaltyPct: 10 } },
+  { label: "RPC Node Provider", defaults: { minUptime: 99.95, responseTimeHrs: 1, penaltyPct: 15 } },
+  { label: "CDN / Edge Network", defaults: { minUptime: 99.9, responseTimeHrs: 2, penaltyPct: 8 } },
+  { label: "Data Center Colocation", defaults: { minUptime: 99.99, responseTimeHrs: 24, penaltyPct: 5 } },
+  { label: "API Gateway", defaults: { minUptime: 99.5, responseTimeHrs: 12, penaltyPct: 10 } },
+  { label: "Custom", defaults: null },
+];
+
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
   visible: (i: number) => ({
@@ -20,9 +29,10 @@ export default function CreateSLA() {
   const { address, isConnected } = useAccount();
   const [form, setForm] = useState({
     tenantAddress: "" as Address | "",
-    responseTimeHrs: 48,
-    minUptime: 99.5,
-    penaltyPct: 5,
+    serviceName: "Cloud Hosting",
+    responseTimeHrs: 4,
+    minUptime: 99.9,
+    penaltyPct: 10,
     bondEth: 1.0,
   });
 
@@ -46,6 +56,7 @@ export default function CreateSLA() {
       functionName: "createSLA",
       args: [
         form.tenantAddress as Address,
+        form.serviceName,
         BigInt(form.responseTimeHrs),
         BigInt(Math.round(form.minUptime * 100)),
         BigInt(Math.round(form.penaltyPct * 100)),
@@ -64,7 +75,7 @@ export default function CreateSLA() {
         <motion.div custom={0} variants={fadeUp}>
           <h1 className="text-2xl md:text-3xl font-semibold text-white tracking-tight mb-1">Create SLA Agreement</h1>
           <p className="text-[14px] mb-8" style={{ color: "var(--muted)" }}>
-            Define terms and bond collateral. CRE will automatically enforce violations.
+            Define SLA terms and lock collateral. This bond will be slashed on breaches detected by the AI Tribunal.
           </p>
         </motion.div>
 
@@ -91,6 +102,44 @@ export default function CreateSLA() {
             className={`glass-card glass-card-glow rounded-2xl p-6 space-y-4 transition-opacity ${!isConnected || !isVerified ? "opacity-40 pointer-events-none" : ""}`}
           >
             <div>
+              <label className="block text-[13px] mb-1.5" style={{ color: "var(--muted)" }}>Service Type</label>
+              <div className="flex flex-wrap gap-2">
+                {SERVICE_PRESETS.map(preset => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      const updates: Record<string, unknown> = { serviceName: preset.label };
+                      if (preset.defaults) Object.assign(updates, preset.defaults);
+                      setForm(f => ({ ...f, ...updates }));
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
+                    style={{
+                      background: form.serviceName === preset.label ? "rgba(55,91,210,0.2)" : "rgba(255,255,255,0.04)",
+                      border: form.serviceName === preset.label ? "1px solid rgba(55,91,210,0.4)" : "1px solid var(--card-border)",
+                      color: form.serviceName === preset.label ? "var(--chainlink-light)" : "var(--muted-strong)",
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {form.serviceName === "Custom" && (
+              <div>
+                <label className="block text-[13px] mb-1.5" style={{ color: "var(--muted)" }}>Service Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. GPU Compute Cluster"
+                  value={form.serviceName === "Custom" ? "" : form.serviceName}
+                  onChange={e => setForm({ ...form, serviceName: e.target.value || "Custom" })}
+                  className="w-full px-4 py-2.5 rounded-lg text-white text-[13px]"
+                />
+              </div>
+            )}
+
+            <div>
               <label className="block text-[13px] mb-1.5" style={{ color: "var(--muted)" }}>Tenant Address</label>
               <input
                 type="text"
@@ -105,7 +154,7 @@ export default function CreateSLA() {
             <div className="grid grid-cols-2 gap-4">
               {[
                 { label: "Response Time (hours)", value: form.responseTimeHrs, key: "responseTimeHrs", min: 1, max: 168, step: 1 },
-                { label: "Bond Amount (ETH)", value: form.bondEth, key: "bondEth", min: 0.1, step: 0.1 },
+                { label: "Collateral Bond (ETH)", value: form.bondEth, key: "bondEth", min: 0.1, step: 0.1 },
                 { label: "Min Uptime (%)", value: form.minUptime, key: "minUptime", min: 90, max: 100, step: 0.1 },
                 { label: "Penalty per Breach (%)", value: form.penaltyPct, key: "penaltyPct", min: 1, max: 100, step: 0.5 },
               ].map(({ label, value, key, ...rest }) => (
@@ -123,7 +172,7 @@ export default function CreateSLA() {
             </div>
 
             {/* Summary */}
-            <div className="p-4 rounded-xl text-[13px] space-y-1.5" style={{ background: "rgba(255,255,255,0.02)" }}>
+            <div className="bordered-box p-4 rounded-xl text-[13px] space-y-1.5" style={{ background: "rgba(255,255,255,0.02)" }}>
               <p className="font-medium mb-2 text-white text-[12px] uppercase tracking-wider">Agreement Summary</p>
               <p style={{ color: "var(--muted-strong)" }}>Uptime threshold: <span className="text-white">{minUptimeBps} bps ({form.minUptime}%)</span></p>
               <p style={{ color: "var(--muted-strong)" }}>Penalty on breach: <span className="text-white">{penaltyBps} bps ({form.penaltyPct}% of bond)</span></p>

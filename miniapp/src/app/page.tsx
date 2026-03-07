@@ -13,7 +13,7 @@ import { sepolia } from "viem/chains";
 
 type Screen = "home" | "register" | "slas" | "claim";
 
-const SLA_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_SLA_CONTRACT_ADDRESS || "0xB71247A5744b5c0e16a2b4374A34aCa8319703dB";
+const SLA_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_SLA_CONTRACT_ADDRESS || "0x7c8C2E0D488d2785040171f4C087B0EA7637DE91";
 const TENDERLY_RPC = "https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d";
 const MAX_BOND_ETH = 3; // Demo: max 3 ETH for visual scaling
 
@@ -374,7 +374,7 @@ export default function App() {
             </div>
 
             {registered ? (
-              <div className="bg-green-400/10 border border-green-400/20 rounded-2xl p-4">
+              <div className="rounded-2xl p-4" style={{ background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.2)" }}>
                 <p className="text-green-400 font-semibold">Registered as Provider</p>
                 <p className="text-[15px] mt-1" style={{ color: "var(--muted)" }}>{txStatus}</p>
                 <p className="text-xs mt-3" style={{ color: "var(--muted)" }}>Chainlink CRE will relay your registration to Sepolia and run a compliance check automatically.</p>

@@ -37,8 +37,8 @@ body {
 
 /* Glass card — GPU-only animations (transform + opacity) */
 .glass-card {
-  background: var(--card);
-  border: 1px solid var(--card-border);
+  background: var(--card) !important;
+  border: 1px solid var(--card-border) !important;
   transition: transform 0.15s ease-out;
 }
 .glass-card:active {
@@ -47,35 +47,40 @@ body {
 
 /* Primary button */
 .btn-primary {
-  background: var(--chainlink-blue);
-  color: white;
-  font-weight: 600;
-  border-radius: 16px;
-  transition: opacity 0.15s ease;
-  cursor: pointer;
+  background: var(--chainlink-blue) !important;
+  color: white !important;
+  font-weight: 600 !important;
+  border-radius: 16px !important;
+  transition: opacity 0.15s ease !important;
+  cursor: pointer !important;
 }
 .btn-primary:active:not(:disabled) {
-  opacity: 0.8;
+  opacity: 0.8 !important;
 }
 .btn-primary:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+  opacity: 0.4 !important;
+  cursor: not-allowed !important;
 }
 
 /* Input styling */
 input[type="text"],
 input[type="number"],
 textarea {
-  background: var(--input-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 16px;
+  background: var(--input-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  border-radius: 16px !important;
 }
 input[type="text"]:focus,
 input[type="number"]:focus,
 textarea:focus {
-  border-color: rgba(84, 147, 247, 0.4);
-  box-shadow: 0 0 0 3px rgba(84, 147, 247, 0.1);
-  outline: none;
+  border-color: rgba(84, 147, 247, 0.4) !important;
+  box-shadow: 0 0 0 3px rgba(84, 147, 247, 0.1) !important;
+  outline: none !important;
+}
+
+/* Subtle bordered container */
+.bordered-box {
+  border: 1px solid var(--card-border) !important;
 }
 
 /* Ambient mesh gradient — shifts based on system state */

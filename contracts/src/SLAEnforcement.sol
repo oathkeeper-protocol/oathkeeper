@@ -53,6 +53,7 @@ contract SLAEnforcement {
     struct SLA {
         address provider;
         address tenant;
+        string serviceName;    // e.g. "Cloud Hosting — EU-West"
         uint256 bondAmount;
         uint256 responseTimeHrs;
         uint256 minUptimeBps;  // e.g. 9950 = 99.50%
@@ -209,6 +210,7 @@ contract SLAEnforcement {
     /// @notice Create an SLA agreement (must be a verified provider)
     function createSLA(
         address tenant,
+        string calldata serviceName,
         uint256 responseTimeHrs,
         uint256 minUptimeBps,
         uint256 penaltyBps
@@ -220,6 +222,7 @@ contract SLAEnforcement {
         slas[slaId] = SLA({
             provider: msg.sender,
             tenant: tenant,
+            serviceName: serviceName,
             bondAmount: msg.value,
             responseTimeHrs: responseTimeHrs,
             minUptimeBps: minUptimeBps,

@@ -78,9 +78,18 @@ OathLayer uses a **3-agent adversarial AI tribunal** to prevent false positives 
 
 ## How Tenderly is Used
 
-- **Virtual TestNet** — Sepolia fork with unlimited faucet, impersonation for testing
-- **Public explorer** — judges verify all transactions without a wallet
-- **evm_increaseTime** — manipulate block.timestamp for cooldown testing
+OathLayer runs on **two Tenderly Virtual TestNets** with State Sync enabled — keeping forked state current with live testnets:
+
+| VNet | Forked From | Chain ID | RPC |
+|------|-------------|----------|-----|
+| **OathLayer VNet** | Sepolia | 11155111 | `https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d` |
+| **OathLayer World Chain VNet** | World Chain Sepolia | 4801 | `https://virtual.worldchain-sepolia.eu.rpc.tenderly.co/d8f04de9-4cc1-4066-b8d3-31ed51ee1d85` |
+
+- **State Sync** — Both VNets sync state with their upstream testnets, keeping World ID merkle roots and other protocol state current. This enables live World ID on-chain verification on the fork.
+- **Public Explorer** — Judges can verify all transactions without connecting a wallet
+- **Unlimited faucet** — Fund any wallet for testing via Tenderly dashboard
+- **evm_increaseTime** — Manipulate `block.timestamp` for cooldown/timing tests
+- **Impersonation** — `--unlocked` flag for testing CRE forwarder calls without private keys
 
 ---
 
@@ -88,10 +97,12 @@ OathLayer uses a **3-agent adversarial AI tribunal** to prevent false positives 
 
 | Contract | Chain | Address |
 |---|---|---|
-| `SLAEnforcement` | Tenderly VNet (Sepolia fork) | `0x8286A8cfA5c8C1872097D9b43E01CbdEe934D319` |
-| `WorldChainRegistry` | World Chain Sepolia (4801) | `0xe1349d2c44422b70c73bf767afb58ae1c59cd1fd` |
+| `SLAEnforcement` | OathLayer VNet (Sepolia fork, 11155111) | `0x7c8C2E0D488d2785040171f4C087B0EA7637DE91` |
+| `WorldChainRegistry` | OathLayer World Chain VNet (World Chain Sepolia fork, 4801) | `0xe1349d2c44422b70c73bf767afb58ae1c59cd1fd` |
 
-**Tenderly Explorer:** [View all transactions](https://dashboard.tenderly.co/robbyn/project/testnet/5c780e4f-4df5-4a50-b221-2342cd4b713e)
+**Tenderly Explorers:**
+- [OathLayer VNet (Sepolia)](https://dashboard.tenderly.co/robbyn/project/testnet/5c780e4f-4df5-4a50-b221-2342cd4b713e) — SLAEnforcement transactions
+- [OathLayer World Chain VNet](https://dashboard.tenderly.co/robbyn/project/testnet/d8f04de9-4cc1-4066-b8d3-31ed51ee1d85) — WorldChainRegistry transactions
 
 ---
 
@@ -312,7 +323,7 @@ cd dashboard && npm run dev
 
 # 3. Fund wallet + register provider via Tenderly impersonation (terminal 3)
 export TENDERLY_RPC=https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d
-export SLA=0x8286A8cfA5c8C1872097D9b43E01CbdEe934D319
+export SLA=0x7c8C2E0D488d2785040171f4C087B0EA7637DE91
 export CRE_FWD=0x4B2fF22FFeb81292F8511a8eB370C4F7Aa656d9B
 
 cast rpc tenderly_setBalance <YOUR_ADDRESS> 0x56BC75E2D63100000 --rpc-url $TENDERLY_RPC
@@ -353,8 +364,8 @@ curl -X POST http://localhost:3001/reset -H "x-admin-token: demo-secret"
 | AI | Groq / Llama 3.3 70B — 3-agent Tribunal Council (TEE-encrypted via ConfidentialHTTPClient) |
 | Price Feeds | Chainlink AggregatorV3Interface (ETH/USD) |
 | Privacy | CRE ConfidentialHTTPClient (TEE enclaves) |
-| Identity | World ID / IDKit v1 + MiniKit |
-| Testing | Tenderly Virtual TestNets |
+| Identity | World ID / IDKit v4 + MiniKit |
+| Testing | Tenderly Virtual TestNets (State Sync enabled) |
 | Frontend | Next.js + wagmi + viem + RainbowKit |
 | Mobile | World Mini App SDK (MiniKit) |
 

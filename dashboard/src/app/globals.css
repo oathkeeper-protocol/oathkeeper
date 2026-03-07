@@ -95,6 +95,11 @@ textarea:focus {
   cursor: not-allowed !important;
 }
 
+/* Subtle bordered container (non-card elements like summary boxes) */
+.bordered-box {
+  border: 1px solid var(--card-border) !important;
+}
+
 /* Noise texture overlay */
 .noise-overlay::after {
   content: '';

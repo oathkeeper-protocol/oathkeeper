@@ -146,6 +146,94 @@ app.post('/set-history', requireAdminAuth, (req: Request, res: Response) => {
   res.json({ ok: true, address, entries: history.length });
 });
 
+// POST /trigger-scan — run CRE simulation (broadcast mode)
+// Demo convenience: triggers the CRE cron scan from the API instead of CLI
+app.post('/trigger-scan', requireAdminAuth, async (req: Request, res: Response) => {
+  const { broadcast = true, triggerIndex = 0 } = req.body as { broadcast?: boolean; triggerIndex?: number };
+  const creBin = `${process.env.HOME}/.cre/bin/cre`;
+  const projectRoot = require('path').resolve(__dirname, '../..');
+  const workflowPath = require('path').resolve(__dirname, '..');
+
+  const args = [
+    'workflow', 'simulate', workflowPath,
+    '--target', 'local-simulation',
+    '--non-interactive',
+    '--trigger-index', String(triggerIndex),
+    ...(broadcast ? ['--broadcast'] : []),
+  ];
+
+  console.log(`[MockAPI] Triggering CRE scan: ${creBin} ${args.join(' ')}`);
+
+  try {
+    const { execFile } = require('child_process');
+    const child = execFile(creBin, args, {
+      cwd: projectRoot,
+      timeout: 120_000,
+      env: { ...process.env },
+    }, (error: Error | null, stdout: string, stderr: string) => {
+      if (error) {
+        console.error(`[MockAPI] CRE scan failed:`, error.message);
+        console.error(stderr);
+      } else {
+        console.log(`[MockAPI] CRE scan completed`);
+        console.log(stdout.slice(-500));
+      }
+    });
+
+    res.json({
+      ok: true,
+      message: `CRE scan triggered (broadcast: ${broadcast}, trigger: ${triggerIndex})`,
+      note: 'Scan runs in background — check server logs for result',
+    });
+  } catch (err: any) {
+    console.error('[MockAPI] Failed to spawn CRE:', err);
+    res.status(500).json({ error: 'Failed to trigger CRE scan', detail: err.message });
+  }
+});
+
+// POST /demo-breach — one-click: drop uptime + trigger CRE scan
+// Convenience endpoint for demo: sets uptime low and immediately runs the scan
+app.post('/demo-breach', requireAdminAuth, async (req: Request, res: Response) => {
+  const { uptime = 94.0 } = req.body as { uptime?: number };
+  globalUptime = uptime;
+  console.log(`[MockAPI] Demo breach: uptime set to ${uptime}%, triggering CRE scan...`);
+
+  // Trigger the scan internally
+  const creBin = `${process.env.HOME}/.cre/bin/cre`;
+  const projectRoot = require('path').resolve(__dirname, '../..');
+  const workflowPath = require('path').resolve(__dirname, '..');
+
+  try {
+    const { execFile } = require('child_process');
+    execFile(creBin, [
+      'workflow', 'simulate', workflowPath,
+      '--target', 'local-simulation',
+      '--non-interactive',
+      '--trigger-index', '0',
+      '--broadcast',
+    ], {
+      cwd: projectRoot,
+      timeout: 120_000,
+      env: { ...process.env },
+    }, (error: Error | null, stdout: string, stderr: string) => {
+      if (error) {
+        console.error(`[MockAPI] Demo breach scan failed:`, error.message);
+      } else {
+        console.log(`[MockAPI] Demo breach scan completed`);
+        console.log(stdout.slice(-500));
+      }
+    });
+
+    res.json({
+      ok: true,
+      message: `Uptime set to ${uptime}%, CRE scan triggered`,
+      note: 'Scan runs in background — dashboard will update when breach is recorded on-chain',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to trigger scan', detail: err.message });
+  }
+});
+
 // POST /reset — reset all uptime to healthy
 app.post('/reset', requireAdminAuth, (_req: Request, res: Response) => {
   globalUptime = 99.9;
@@ -158,8 +246,12 @@ app.post('/reset', requireAdminAuth, (_req: Request, res: Response) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`[MockAPI] OathLayer mock uptime API running on :${PORT}`);
-  console.log(`[MockAPI] Set breach: POST /set-uptime {"uptime": 98.0}`);
-  console.log(`[MockAPI] Check status: GET /status`);
+  console.log(`[MockAPI] Endpoints:`);
+  console.log(`  GET  /status                  — health check`);
+  console.log(`  POST /set-uptime              — set global uptime`);
+  console.log(`  POST /trigger-scan            — run CRE simulation`);
+  console.log(`  POST /demo-breach             — one-click: drop uptime + trigger scan`);
+  console.log(`  POST /reset                   — reset all to healthy`);
 });
 
 export default app;

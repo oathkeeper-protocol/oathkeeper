@@ -123,9 +123,9 @@ contract SLAEnforcementTest is Test {
         _registerAndApproveProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
-        (address p, address t, uint256 bond, uint256 hrs, uint256 uptime, uint256 penalty,, bool active) = slaContract.slas(slaId);
+        (address p, address t,, uint256 bond, uint256 hrs, uint256 uptime, uint256 penalty,, bool active) = slaContract.slas(slaId);
         assertEq(p, provider);
         assertEq(t, tenant);
         assertEq(bond, 1 ether);
@@ -139,14 +139,14 @@ contract SLAEnforcementTest is Test {
         _approveProvider(); // compliant but not verified
         vm.prank(provider);
         vm.expectRevert("Not verified provider");
-        slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
     }
 
     function test_createSLANotCompliant() public {
         _registerProvider(); // verified but not compliant
         vm.prank(provider);
         vm.expectRevert("Not compliant");
-        slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
     }
 
     // --- Claims ---
@@ -155,7 +155,7 @@ contract SLAEnforcementTest is Test {
         _registerAndApproveProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         vm.prank(tenant);
         slaContract.fileClaim(slaId, "Plumbing issue in unit 4B");
@@ -171,7 +171,7 @@ contract SLAEnforcementTest is Test {
         _registerAndApproveProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         vm.prank(provider);
         vm.expectRevert("Not tenant");
@@ -184,13 +184,13 @@ contract SLAEnforcementTest is Test {
         _registerAndApproveProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         uint256 tenantBalBefore = tenant.balance;
         vm.prank(creForwarder);
         slaContract.recordBreach(slaId, 9800); // penaltyBps read from SLA storage (500 = 5%)
 
-        (,, uint256 bondAfter,,,,, bool active) = slaContract.slas(slaId);
+        (,,, uint256 bondAfter,,,,, bool active) = slaContract.slas(slaId);
         assertEq(bondAfter, 0.95 ether);
         assertEq(tenant.balance - tenantBalBefore, 0.05 ether);
         assertTrue(active);
@@ -200,12 +200,12 @@ contract SLAEnforcementTest is Test {
         _registerAndApproveProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 10000);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 10000);
 
         vm.prank(creForwarder);
         slaContract.recordBreach(slaId, 9800);
 
-        (,, uint256 bondAfter,,,,, bool active) = slaContract.slas(slaId);
+        (,,, uint256 bondAfter,,,,, bool active) = slaContract.slas(slaId);
         assertEq(bondAfter, 0);
         assertFalse(active);
     }
@@ -214,7 +214,7 @@ contract SLAEnforcementTest is Test {
         _registerAndApproveProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         address attacker = address(0xBAD);
         vm.expectRevert("Only CRE forwarder");
@@ -229,7 +229,7 @@ contract SLAEnforcementTest is Test {
         _registerAndApproveProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         vm.expectEmit(true, true, false, true);
         emit ArbitrationDecision(slaId, arbitrator, true);
@@ -250,7 +250,7 @@ contract SLAEnforcementTest is Test {
         _registerAndApproveProvider();
 
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         uint256 ratio = slaContract.getCollateralRatio(slaId);
         assertGt(ratio, 0);
@@ -278,7 +278,7 @@ contract SLAEnforcementTest is Test {
     function test_BreachWarning() public {
         _registerAndApproveProvider();
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         vm.prank(creForwarder);
         slaContract.recordBreachWarning(slaId, 85, "Uptime declining");
@@ -287,7 +287,7 @@ contract SLAEnforcementTest is Test {
     function test_BreachWarning_Cooldown() public {
         _registerAndApproveProvider();
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         vm.prank(creForwarder);
         slaContract.recordBreachWarning(slaId, 85, "Uptime declining");
@@ -313,7 +313,7 @@ contract SLAEnforcementTest is Test {
     function test_breachCount_Increments() public {
         _registerAndApproveProvider();
         vm.prank(provider);
-        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, 48, 9950, 500);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
         assertEq(slaContract.breachCount(), 0);
         vm.prank(creForwarder);

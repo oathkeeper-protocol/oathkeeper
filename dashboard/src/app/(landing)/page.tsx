@@ -124,7 +124,7 @@ export default function LandingPage() {
             margin: 0,
           }}
         >
-          Chainlink CRE monitors uptime, Gemini Flash predicts breaches, and penalties execute on-chain.
+          Chainlink CRE monitors uptime, AI Tribunal Council predicts breaches, and penalties execute on-chain.
           Provider identity verified by World ID.
         </motion.p>
 
@@ -167,7 +167,7 @@ export default function LandingPage() {
             justifyContent: "center",
           }}
         >
-          {["Chainlink CRE", "World ID", "Gemini Flash", "Foundry"].map((tech) => (
+          {["Chainlink CRE", "World ID", "AI Tribunal", "Foundry"].map((tech) => (
             <span
               key={tech}
               style={{

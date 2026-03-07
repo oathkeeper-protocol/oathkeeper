@@ -1,13 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { IDKitWidget, VerificationLevel, type ISuccessResult } from "@worldcoin/idkit";
+import { IDKitRequestWidget, deviceLegacy, type IDKitResult, type RpContext } from "@worldcoin/idkit";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, usePublicClient } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { formatEther, parseAbiItem } from "viem";
 import { SLA_CONTRACT_ADDRESS, SLA_ABI, DEPLOY_BLOCK } from "@/lib/contract";
 import { decodeProof } from "@/lib/proof";
+
+const APP_ID = (process.env.NEXT_PUBLIC_WLD_APP_ID || "app_staging_oathlayer") as `app_${string}`;
+const ACTION = "oathlayer-arbitrator-register";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -64,7 +67,7 @@ function DisputeCard({ slaId, provider, uptimeBps, penaltyAmount }: {
         </span>
       </div>
 
-      <div className="p-3 rounded-lg mb-4 text-[13px]" style={{ background: "rgba(255,255,255,0.02)", color: "var(--muted)" }}>
+      <div className="bordered-box p-3 rounded-lg mb-4 text-[13px]" style={{ background: "rgba(255,255,255,0.02)", color: "var(--muted)" }}>
         CRE detected uptime below threshold. Provider claims API measurement was incorrect during a monitoring window.
       </div>
 
@@ -104,7 +107,10 @@ function DisputeCard({ slaId, provider, uptimeBps, penaltyAmount }: {
 
 export default function Arbitrate() {
   const { address, isConnected } = useAccount();
-  const [proof, setProof] = useState<ISuccessResult | null>(null);
+  const [idkitOpen, setIdkitOpen] = useState(false);
+  const [rpContext, setRpContext] = useState<RpContext | null>(null);
+  const [proofResult, setProofResult] = useState<IDKitResult | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
   const [breaches, setBreaches] = useState<BreachEvent[]>([]);
   const publicClient = usePublicClient();
 
@@ -115,6 +121,24 @@ export default function Arbitrate() {
 
   const { writeContract, data: regTxHash, isPending: regPending, error: regError } = useWriteContract();
   const { isLoading: regConfirming, isSuccess: regSuccess } = useWaitForTransactionReceipt({ hash: regTxHash });
+
+  const fetchRpContext = useCallback(async () => {
+    try {
+      const res = await fetch("/api/worldid/sign", { method: "POST" });
+      if (!res.ok) throw new Error("Failed to get RP signature");
+      const data = await res.json();
+      setRpContext(data as RpContext);
+    } catch (e) {
+      console.error("RP sign error:", e);
+      setVerifyError("Failed to initialize World ID. Check server configuration.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isConnected && !isVerifiedArbitrator) {
+      fetchRpContext();
+    }
+  }, [isConnected, isVerifiedArbitrator, fetchRpContext]);
 
   useEffect(() => {
     if (!publicClient) return;
@@ -137,21 +161,33 @@ export default function Arbitrate() {
     return () => clearInterval(interval);
   }, [publicClient]);
 
-  const handleVerify = async (result: ISuccessResult) => {
+  const handleVerify = async (result: IDKitResult) => {
+    setVerifyError(null);
     const res = await fetch("/api/verify-worldid", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...result, action: "oathlayer-arbitrator-register" }),
+      body: JSON.stringify(result),
     });
-    if (!res.ok) throw new Error("Verification failed");
-    setProof(result);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const msg = data?.error || "World ID verification failed";
+      setVerifyError(msg);
+      throw new Error(msg);
+    }
+    setProofResult(result);
   };
 
   const handleRegisterArbitrator = () => {
-    if (!proof) return;
+    if (!proofResult) return;
+    const resp = proofResult.responses[0];
+    if (!resp || !("merkle_root" in resp)) {
+      setVerifyError("Invalid proof format");
+      return;
+    }
+    const v3 = resp as { merkle_root: string; nullifier: string; proof: string };
     writeContract({
       address: SLA_CONTRACT_ADDRESS, abi: SLA_ABI, functionName: "registerArbitrator",
-      args: [BigInt(proof.merkle_root), BigInt(proof.nullifier_hash), decodeProof(proof.proof)],
+      args: [BigInt(v3.merkle_root), BigInt(v3.nullifier), decodeProof(v3.proof)],
     });
   };
 
@@ -184,19 +220,38 @@ export default function Arbitrate() {
           <h1 className="text-2xl font-semibold text-white mb-2">Arbitration Panel</h1>
           <p className="text-[14px] mb-8" style={{ color: "var(--muted)" }}>World ID verification required to prevent Sybil attacks on dispute resolution.</p>
 
-          {!proof ? (
-            <IDKitWidget
-              app_id={(process.env.NEXT_PUBLIC_WLD_APP_ID || "app_staging_oathlayer") as `app_${string}`}
-              action="oathlayer-arbitrator-register"
-              signal={address ?? ""}
-              verification_level={VerificationLevel.Device}
-              handleVerify={handleVerify}
-              onSuccess={() => {}}
-            >
-              {({ open }: { open: () => void }) => (
-                <button onClick={open} className="btn-primary px-8 py-3 text-[14px]">Verify with World ID</button>
+          {!proofResult ? (
+            <>
+              {rpContext && (
+                <IDKitRequestWidget
+                  open={idkitOpen}
+                  onOpenChange={setIdkitOpen}
+                  app_id={APP_ID}
+                  action={ACTION}
+                  rp_context={rpContext}
+                  allow_legacy_proofs={true}
+                  preset={deviceLegacy({ signal: address ?? "" })}
+                  handleVerify={handleVerify}
+                  onSuccess={() => {}}
+                  onError={(errorCode) => setVerifyError(`World ID error: ${errorCode}`)}
+                />
               )}
-            </IDKitWidget>
+              <button
+                onClick={() => {
+                  setVerifyError(null);
+                  if (!rpContext) fetchRpContext().then(() => setIdkitOpen(true));
+                  else setIdkitOpen(true);
+                }}
+                className="btn-primary px-8 py-3 text-[14px]"
+              >
+                Verify with World ID
+              </button>
+              {verifyError && (
+                <div className="mt-4 p-3 rounded-lg text-[13px] mx-auto max-w-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)" }}>
+                  <p className="text-red-400">{verifyError}</p>
+                </div>
+              )}
+            </>
           ) : (
             <div className="space-y-4">
               <p className="text-[13px]" style={{ color: "rgba(74,222,128,0.8)" }}>✓ World ID verified — register on-chain to access panel</p>

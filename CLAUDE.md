@@ -33,10 +33,10 @@ World Chain (4801)          CRE Workflows              Sepolia (Tenderly VNet)
 
 ## Deployment
 
-- **SLAEnforcement**: Tenderly VNet (Sepolia fork) — `0x8286A8cfA5c8C1872097D9b43E01CbdEe934D319`
-- **WorldChainRegistry**: World Chain Sepolia (4801) — `0xe1349d2c44422b70c73bf767afb58ae1c59cd1fd`
-- **Sepolia RPC**: `https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d`
-- **World Chain RPC**: `https://worldchain-sepolia.g.alchemy.com/public`
+- **SLAEnforcement**: OathLayer VNet (Sepolia fork, State Sync ON) — `0x7c8C2E0D488d2785040171f4C087B0EA7637DE91`
+- **WorldChainRegistry**: OathLayer World Chain VNet (World Chain Sepolia fork, State Sync ON) — `0xe1349d2c44422b70c73bf767afb58ae1c59cd1fd`
+- **Sepolia VNet RPC**: `https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d`
+- **World Chain VNet RPC**: `https://virtual.worldchain-sepolia.eu.rpc.tenderly.co/d8f04de9-4cc1-4066-b8d3-31ed51ee1d85`
 
 ## Commands
 
