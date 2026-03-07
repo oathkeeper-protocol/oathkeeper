@@ -82,6 +82,7 @@ contract SLAEnforcement {
 
     // --- Breach Prediction ---
     mapping(uint256 => uint256) public lastWarningTime;
+    mapping(uint256 => uint256) public lastBreachTime;
     uint256 public breachCount;
 
     uint256 public slaCount;
@@ -260,6 +261,8 @@ contract SLAEnforcement {
     ) external onlyCREForwarder {
         SLA storage sla = slas[slaId];
         require(sla.active, "SLA not active");
+        require(lastBreachTime[slaId] == 0 || block.timestamp - lastBreachTime[slaId] >= 24 hours, "Breach cooldown");
+        lastBreachTime[slaId] = block.timestamp;
 
         uint256 penaltyAmount = (sla.bondAmount * sla.penaltyBps) / 10000;
         require(penaltyAmount <= sla.bondAmount, "Penalty exceeds bond");

@@ -320,4 +320,26 @@ contract SLAEnforcementTest is Test {
         slaContract.recordBreach(slaId, 9800);
         assertEq(slaContract.breachCount(), 1);
     }
+
+    // --- Breach Cooldown ---
+
+    function test_breachCooldown() public {
+        _registerAndApproveProvider();
+        vm.prank(provider);
+        uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
+
+        vm.prank(creForwarder);
+        slaContract.recordBreach(slaId, 9800);
+
+        // Second breach immediately should revert
+        vm.prank(creForwarder);
+        vm.expectRevert("Breach cooldown");
+        slaContract.recordBreach(slaId, 9800);
+
+        // After 24 hours, breach should succeed
+        vm.warp(block.timestamp + 24 hours);
+        vm.prank(creForwarder);
+        slaContract.recordBreach(slaId, 9800);
+        assertEq(slaContract.breachCount(), 2);
+    }
 }
