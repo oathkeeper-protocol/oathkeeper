@@ -380,34 +380,49 @@ app.post('/demo-breach', requireAdminAuth, async (req: Request, res: Response) =
       }));
     }
 
-    const results: { slaId: number; verdict: string; warning?: string; breach?: string; error?: string }[] = [];
+    const results: { slaId: number; verdict: string; action: string; warning?: string; breach?: string; skipped?: string; error?: string }[] = [];
 
-    for (const verdict of verdicts) {
+    for (let i = 0; i < verdicts.length; i++) {
+      const verdict = verdicts[i];
+      const target = targets[i];
+      const belowThreshold = uptimeBps < target.minUptimeBps;
+
       try {
-        // 1. Record breach warning (AI tribunal verdict)
+        if (verdict.action === 'NONE' && !belowThreshold) {
+          // Tribunal says clear AND uptime is above threshold — skip entirely
+          console.log(`[MockAPI] SLA #${verdict.slaId} — CLEAR (${uptime}% >= ${target.minUptimeBps/100}% threshold)`);
+          results.push({ slaId: verdict.slaId, verdict: verdict.tally, action: 'skip', skipped: `Uptime ${uptime}% above ${target.minUptimeBps/100}% threshold` });
+          continue;
+        }
+
+        // Record tribunal verdict as warning
         const warnHash = await walletClient.writeContract({
           address: CONTRACT, abi: SLA_ABI, functionName: 'recordBreachWarning',
           args: [BigInt(verdict.slaId), BigInt(verdict.riskScore), verdict.summary],
         });
         console.log(`[MockAPI] SLA #${verdict.slaId} — BreachWarning tx: ${warnHash} (${verdict.tally})`);
 
-        // 2. Record breach (slash bond) — always slash in demo-breach regardless of tribunal outcome
-        const breachHash = await walletClient.writeContract({
-          address: CONTRACT, abi: SLA_ABI, functionName: 'recordBreach',
-          args: [BigInt(verdict.slaId), BigInt(uptimeBps)],
-        });
-        console.log(`[MockAPI] SLA #${verdict.slaId} — Breach tx: ${breachHash}`);
-
-        results.push({ slaId: verdict.slaId, verdict: verdict.tally, warning: warnHash, breach: breachHash });
+        // Only slash if uptime is actually below SLA threshold
+        if (belowThreshold) {
+          const breachHash = await walletClient.writeContract({
+            address: CONTRACT, abi: SLA_ABI, functionName: 'recordBreach',
+            args: [BigInt(verdict.slaId), BigInt(uptimeBps)],
+          });
+          console.log(`[MockAPI] SLA #${verdict.slaId} — Breach tx: ${breachHash}`);
+          results.push({ slaId: verdict.slaId, verdict: verdict.tally, action: 'breach', warning: warnHash, breach: breachHash });
+        } else {
+          console.log(`[MockAPI] SLA #${verdict.slaId} — Warning only (${uptime}% >= ${target.minUptimeBps/100}% threshold)`);
+          results.push({ slaId: verdict.slaId, verdict: verdict.tally, action: 'warning', warning: warnHash });
+        }
       } catch (err: any) {
-        console.error(`[MockAPI] SLA #${verdict.slaId} breach failed:`, err.message?.slice(0, 200));
-        results.push({ slaId: verdict.slaId, verdict: verdict.tally, error: err.message?.slice(0, 200) });
+        console.error(`[MockAPI] SLA #${verdict.slaId} failed:`, err.message?.slice(0, 200));
+        results.push({ slaId: verdict.slaId, verdict: verdict.tally, action: 'error', error: err.message?.slice(0, 200) });
       }
     }
 
     res.json({
       ok: true,
-      message: `AI Tribunal + breach for ${results.length} SLA(s) at ${uptime}% uptime`,
+      message: `AI Tribunal for ${results.length} SLA(s) at ${uptime}% uptime`,
       results,
     });
   } catch (err: any) {
