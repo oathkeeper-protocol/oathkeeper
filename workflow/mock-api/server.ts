@@ -192,10 +192,12 @@ async function runTribunal(metrics: { slaId: number; provider: string; uptimeBps
   console.log('[Tribunal] Enforcement Judge deliberating...');
   const judgeVotes = await callGroqAgent(TRIBUNAL_PROMPTS.enforcementJudge(analystSummary, advocateSummary), `Current SLA metrics with 7-day history:\n${metricsJson}`, 0);
 
-  return metrics.map(m => {
-    const aVote = analystVotes.find(v => v.slaId === m.slaId)?.vote;
-    const dVote = advocateVotes.find(v => v.slaId === m.slaId)?.vote;
-    const jVote = judgeVotes.find(v => v.slaId === m.slaId)?.vote;
+  return metrics.map((m, idx) => {
+    // Match by slaId first, fall back to index (LLMs often return slaId: 0 for single-SLA queries)
+    const aVote = (analystVotes.find(v => v.slaId === m.slaId) ?? analystVotes[idx])?.vote;
+    const dVote = (advocateVotes.find(v => v.slaId === m.slaId) ?? advocateVotes[idx])?.vote;
+    const jVote = (judgeVotes.find(v => v.slaId === m.slaId) ?? judgeVotes[idx])?.vote;
+    console.log(`[Tribunal] SLA #${m.slaId} votes: Analyst=${aVote?.vote ?? 'MISS'}, Advocate=${dVote?.vote ?? 'MISS'}, Judge=${jVote?.vote ?? 'MISS'}`);
     return tallyVotes(m.slaId, aVote, dVote, jVote);
   });
 }
