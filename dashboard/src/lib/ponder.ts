@@ -97,6 +97,34 @@ export async function fetchDashboardData() {
   }`);
 }
 
+export async function fetchTenantData(tenant: string) {
+  return gql<{
+    slas: { items: PonderSLA[] };
+    breachs: { items: PonderBreach[] };
+    claims: { items: PonderClaim[] };
+  }>(`{
+    slas(where: { tenant: "${tenant.toLowerCase()}" }, orderBy: "slaId", orderDirection: "desc") {
+      items {
+        id slaId provider tenant serviceName bondAmount
+        responseTimeHrs minUptimeBps penaltyBps active
+        breachCount totalSlashed latestRiskScore latestVerdict
+        createdAt blockNumber
+      }
+    }
+    breachs(orderBy: "timestamp", orderDirection: "desc") {
+      items {
+        id slaId provider uptimeBps penaltyAmount timestamp
+        blockNumber transactionHash
+      }
+    }
+    claims(where: { tenant: "${tenant.toLowerCase()}" }, orderBy: "timestamp", orderDirection: "desc") {
+      items {
+        id claimId slaId tenant timestamp blockNumber transactionHash
+      }
+    }
+  }`);
+}
+
 export async function fetchSLADetail(slaId: string) {
   const slaIdBigInt = slaId;
   return gql<{

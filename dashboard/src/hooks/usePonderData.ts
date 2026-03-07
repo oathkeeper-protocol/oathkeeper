@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   fetchDashboardData,
   fetchSLADetail,
+  fetchTenantData,
   type PonderSLA,
   type PonderBreach,
   type PonderWarning,
@@ -101,4 +102,40 @@ export function useSLADetail(slaId: string) {
   }, [load]);
 
   return { sla, breaches, warnings, claims, isLoading, error };
+}
+
+export function useTenantData(tenant: string | undefined) {
+  const [slas, setSlas] = useState<PonderSLA[]>([]);
+  const [breaches, setBreaches] = useState<PonderBreach[]>([]);
+  const [claims, setClaims] = useState<PonderClaim[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!tenant) return;
+    try {
+      const data = await fetchTenantData(tenant);
+      setSlas(data.slas.items);
+      // Filter breaches to only tenant's SLAs
+      const tenantSlaIds = new Set(data.slas.items.map((s) => s.slaId));
+      setBreaches(data.breachs.items.filter((b) => tenantSlaIds.has(b.slaId)));
+      setClaims(data.claims.items);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [tenant]);
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [load]);
+
+  // Claimed breach tx hashes
+  const claimedBreachSlaIds = new Set(claims.map((c) => c.slaId));
+
+  return { slas, breaches, claims, claimedBreachSlaIds, isLoading, error };
 }
