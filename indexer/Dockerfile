@@ -4,4 +4,4 @@ COPY package*.json ./
 RUN npm install
 COPY . .
 EXPOSE 42069
-CMD ["npm", "run", "start"]
+CMD ["npx", "ponder", "start", "--schema", "public"]
