@@ -1,0 +1,8 @@
+# OathLayer CRE Project Configuration
+# Copy to project.yaml and fill in your RPC URLs
+local-simulation:
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: https://your-sepolia-rpc-url
+    - chain-name: ethereum-testnet-sepolia-worldchain-1
+      url: https://your-worldchain-sepolia-rpc-url

@@ -342,8 +342,8 @@ This pattern demonstrates CRE as a general-purpose cross-chain bridge for identi
 | [`contracts/src/WorldChainRegistry.sol`](./contracts/src/WorldChainRegistry.sol) | Cross-chain registration proxy — emits events consumed by CRE EVM log trigger |
 | [`workflow/workflow.yaml`](./workflow/workflow.yaml) | CRE workflow configuration, targets, secrets |
 | [`workflow/config.local.json`](./workflow/config.local.json) | Runtime config: contract addresses, chain selectors, API endpoints |
-| [`project.yaml`](./project.yaml) | CRE project config with RPC endpoints |
-| [`secrets.yaml`](./secrets.yaml) | CRE secrets mapping (GROQ_API_KEY, UPTIME_API_KEY, COMPLIANCE_API_KEY) |
+| [`project.yaml.example`](./project.yaml.example) | CRE project config with RPC endpoints (copy to `project.yaml`) |
+| [`secrets.yaml.example`](./secrets.yaml.example) | CRE secrets mapping (copy to `secrets.yaml`, export env vars) |
 
 ---
 
