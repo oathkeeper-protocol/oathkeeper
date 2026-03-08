@@ -6,6 +6,19 @@ OathLayer is a trustless SLA enforcement protocol where Chainlink CRE (Compute R
 
 **In short:** CRE watches. AI deliberates. Smart contracts enforce. Humans arbitrate.
 
+## Live Deployments
+
+| Service | URL |
+|---------|-----|
+| **Dashboard** | [oathlayer-protocol.vercel.app](https://oathlayer-protocol.vercel.app) |
+| **Mini App** | [oathlayer-miniapp.robbyn.xyz](https://oathlayer-miniapp.robbyn.xyz) (via World App) |
+| **Mock API** | [oathlayer-api.robbyn.xyz](https://oathlayer-api.robbyn.xyz) |
+| **Ponder Indexer** | [oathlayer-indexer.robbyn.xyz](https://oathlayer-indexer.robbyn.xyz) (GraphQL) |
+| **Sepolia VNet Explorer** | [Tenderly Explorer](https://dashboard.tenderly.co/robbyn/project/testnet/5c780e4f-4df5-4a50-b221-2342cd4b713e) |
+| **World Chain VNet Explorer** | [Tenderly Explorer](https://dashboard.tenderly.co/robbyn/project/testnet/d8f04de9-4cc1-4066-b8d3-31ed51ee1d85) |
+
+> **Demo Video:** [Coming soon — YouTube link]
+
 ---
 
 ## Architecture
@@ -118,7 +131,7 @@ OathLayer runs on **two Tenderly Virtual TestNets** with State Sync enabled — 
 
 | Contract | Chain | Address |
 |---|---|---|
-| `SLAEnforcement` | OathLayer VNet (Sepolia fork, 11155111) | `0x7c8C2E0D488d2785040171f4C087B0EA7637DE91` |
+| `SLAEnforcement` | OathLayer VNet (Sepolia fork, 11155111) | `0x8286A8cfA5c8C1872097D9b43E01CbdEe934D319` |
 | `WorldChainRegistry` | OathLayer World Chain VNet (World Chain Sepolia fork, 4801) | `0xe1349d2c44422b70c73bf767afb58ae1c59cd1fd` |
 
 **Tenderly Explorers:**
@@ -227,8 +240,8 @@ npm run dev  # runs on :3000
 cd miniapp
 npm install
 npm run dev  # runs on :3002
-# Tunnel: cloudflared tunnel run oathlayer-miniapp
-# Access via World App: https://oathlayer-miniapp.robbyn.xyz
+# Production: https://oathlayer-miniapp.robbyn.xyz (deployed on VPS)
+# Access via World App: tap explore → enter URL above
 ```
 
 ### 5. CRE Workflow
@@ -327,6 +340,10 @@ This pattern demonstrates CRE as a general-purpose cross-chain bridge for identi
 | [`workflow/workflow.ts`](./workflow/workflow.ts) | CRE SDK — cron trigger, EVM log triggers, ConfidentialHTTPClient, Secrets, AI Tribunal (Groq/Llama 3.3) |
 | [`contracts/src/SLAEnforcement.sol`](./contracts/src/SLAEnforcement.sol) | `AggregatorV3Interface` (ETH/USD price feed), `onlyCREForwarder` access control |
 | [`contracts/src/WorldChainRegistry.sol`](./contracts/src/WorldChainRegistry.sol) | Cross-chain registration proxy — emits events consumed by CRE EVM log trigger |
+| [`workflow/workflow.yaml`](./workflow/workflow.yaml) | CRE workflow configuration, targets, secrets |
+| [`workflow/config.local.json`](./workflow/config.local.json) | Runtime config: contract addresses, chain selectors, API endpoints |
+| [`project.yaml`](./project.yaml) | CRE project config with RPC endpoints |
+| [`secrets.yaml`](./secrets.yaml) | CRE secrets mapping (GROQ_API_KEY, UPTIME_API_KEY, COMPLIANCE_API_KEY) |
 
 ---
 
@@ -357,7 +374,7 @@ cd dashboard && npm run dev
 
 # 3. Fund wallet + register provider via Tenderly impersonation (terminal 3)
 export TENDERLY_RPC=https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d
-export SLA=0x7c8C2E0D488d2785040171f4C087B0EA7637DE91
+export SLA=0x8286A8cfA5c8C1872097D9b43E01CbdEe934D319
 export CRE_FWD=0x4B2fF22FFeb81292F8511a8eB370C4F7Aa656d9B
 
 cast rpc tenderly_setBalance <YOUR_ADDRESS> 0x56BC75E2D63100000 --rpc-url $TENDERLY_RPC
@@ -419,6 +436,43 @@ The Mini App requires **World App** on mobile:
 2. Create an account (no Orb needed for Device level)
 3. Tap explore → enter `https://oathlayer-miniapp.robbyn.xyz`
 4. Register as provider → verify with World ID → done
+
+---
+
+## How It's Built
+
+- **Smart Contracts** — Solidity ^0.8.20, Foundry for testing/deployment. `SLAEnforcement` on Sepolia handles SLA creation, bond management, breach recording, and claims. `WorldChainRegistry` on World Chain Sepolia handles World ID proof verification and emits events for CRE relay.
+- **CRE Workflow** — TypeScript with Chainlink CRE SDK. Cron trigger scans SLAs every 15 minutes. EVM Log triggers react to claims, provider registrations, and arbitrator registrations. `ConfidentialHTTPClient` encrypts compliance checks and AI inference calls in TEE enclaves.
+- **AI Tribunal** — 3-agent sequential deliberation using Groq (Llama 3.3 70B). Risk Analyst evaluates metrics, Provider Advocate defends with historical context, Enforcement Judge weighs both arguments with 1.5x vote weight. All agents called via `ConfidentialHTTPClient` — API keys never leave the TEE.
+- **World ID** — IDKit v4 on dashboard, MiniKit in World Mini App. ZK proofs verified on-chain via `WorldChainRegistry`, relayed cross-chain to Sepolia by CRE. Two use cases: provider registration (Sybil-resistant identity) and arbitrator access (human override of AI decisions).
+- **Tenderly** — Two Virtual TestNets with State Sync enabled: Sepolia fork for enforcement, World Chain Sepolia fork for identity. Public explorers for judge verification. `evm_increaseTime` for cooldown testing.
+- **Frontend** — Next.js 14, wagmi v2, viem, RainbowKit. Ponder v0.12 indexes all contract events into a GraphQL API. Dashboard polls Ponder every 5 seconds for real-time updates.
+- **Deployment** — Dashboard on Vercel. Mock API, Mini App, and Ponder Indexer on VPS via Docker + Traefik reverse proxy with auto-SSL.
+
+## Challenges
+
+- **CRE is pre-release** — Documentation is sparse and the SDK API changed during development. Required reading source code and experimenting with the simulator to understand trigger behavior, consensus modes, and secret management.
+- **Cross-chain World ID** — World ID is native to World Chain but SLA enforcement lives on Sepolia. Built a CRE-based cross-chain identity relay pattern. Had to match exact `signal` and `groupId` parameters between MiniKit/IDKit and on-chain verification — mismatches produced opaque `0xddae3b71` (InvalidProof) reverts.
+- **AI in TEE constraints** — `ConfidentialHTTPClient` has response size limits and no streaming support. Required careful prompt engineering to keep 3-agent tribunal responses under 200 characters while preserving useful reasoning.
+- **Tenderly State Sync** — World ID proof verification requires current merkle roots from the World ID contract. State Sync on Tenderly VNets was essential to keep the fork's World ID roots current with the live testnet.
+- **Multi-chain coordination** — A single CRE workflow manages events from two different chains (World Chain + Sepolia) and writes back to Sepolia. The CRE simulator doesn't support World Chain's chain selector, requiring config-level disabling for local development.
+
+## Prize Tracks
+
+### Risk & Compliance
+OathLayer automates SLA compliance monitoring for tokenized RWA infrastructure. CRE monitors uptime every 15 minutes, a 3-agent AI Tribunal Council deliberates adversarially to prevent false positives, and breached providers get bonds slashed automatically.
+
+### Privacy (ConfidentialHTTPClient)
+Provider compliance checks and AI Tribunal inference run inside TEE enclaves via `ConfidentialHTTPClient`. API keys (`GROQ_API_KEY`, `COMPLIANCE_API_KEY`) are threshold-encrypted in CRE's secret vault and never visible to DON nodes. Provider PII from compliance checks never leaves the enclave.
+
+### Best Use of World ID with CRE
+World ID is native to World Chain but SLA enforcement lives on Sepolia. OathLayer uses CRE as a cross-chain identity bridge — providers verify via World ID on World Chain, CRE's EVM Log trigger picks up the event, runs a ConfidentialHTTPClient compliance check, and relays the verified identity to Sepolia. This pattern generalizes to any chain.
+
+### Best CRE Usage in World Mini App
+The Mini App lets providers register and tenants file claims directly from World App. Registration triggers a CRE workflow: World ID proof verified on World Chain, ConfidentialHTTPClient runs compliance check, and identity is relayed cross-chain to Sepolia — all from a single tap.
+
+### Build CRE Workflows with Tenderly Virtual TestNets
+Two VNets with State Sync enabled — Sepolia fork for enforcement and World Chain Sepolia fork for identity. Multi-chain CRE workflow orchestrates cross-chain identity relay, AI-powered risk assessment, and automated bond slashing, all testable with Tenderly's public explorer.
 
 ---
 
