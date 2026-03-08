@@ -140,7 +140,6 @@ function DemoControls({ onExit }: { onExit: () => void }) {
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [uptime, setUptime] = useState("94.0");
-  const [slaId, setSlaId] = useState("all");
 
   const callDemo = useCallback(async (action: string, params?: Record<string, unknown>) => {
     setLoading(action);
@@ -163,11 +162,6 @@ function DemoControls({ onExit }: { onExit: () => void }) {
       setLoading(null);
     }
   }, []);
-
-  const demoParams = {
-    uptime: parseFloat(uptime),
-    slaId: slaId === "all" ? null : parseInt(slaId),
-  };
 
   return (
     <div className="fixed bottom-6 right-6 z-50">
@@ -194,18 +188,6 @@ function DemoControls({ onExit }: { onExit: () => void }) {
             </div>
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <label className="text-[11px] font-medium shrink-0" style={{ color: "var(--muted)" }}>SLA</label>
-                <input
-                  type="text"
-                  value={slaId}
-                  onChange={e => setSlaId(e.target.value)}
-                  placeholder="all"
-                  className="flex-1 py-1.5 px-2 rounded-lg text-[12px] font-mono text-white bg-transparent outline-none"
-                  style={{ border: "1px solid var(--card-border)" }}
-                />
-                <span className="text-[10px] shrink-0" style={{ color: "var(--muted)" }}>or #</span>
-              </div>
-              <div className="flex items-center gap-2">
                 <label className="text-[11px] font-medium shrink-0" style={{ color: "var(--muted)" }}>Uptime %</label>
                 <input
                   type="number"
@@ -219,21 +201,16 @@ function DemoControls({ onExit }: { onExit: () => void }) {
                 />
               </div>
               <button
-                onClick={() => callDemo("demo-breach", demoParams)}
+                onClick={() => callDemo("set-uptime", { uptime: parseFloat(uptime) })}
                 disabled={!!loading}
                 className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
-                style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
+                style={{ background: "rgba(55,91,210,0.1)", border: "1px solid rgba(55,91,210,0.2)", color: "var(--chainlink-light)" }}
               >
-                {loading === "demo-breach" ? "Breaching..." : `Simulate Breach (${uptime}%)`}
+                {loading === "set-uptime" ? "Setting..." : `Set Uptime → ${uptime}%`}
               </button>
-              <button
-                onClick={() => callDemo("demo-warning", demoParams)}
-                disabled={!!loading}
-                className="w-full py-2 rounded-lg text-[12px] font-medium transition-colors disabled:opacity-40"
-                style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", color: "#f59e0b" }}
-              >
-                {loading === "demo-warning" ? "Warning..." : "Warning Only (no slash)"}
-              </button>
+              <p className="text-[10px] text-center" style={{ color: "var(--muted)" }}>
+                Then run: <code className="font-mono text-[10px]" style={{ color: "var(--chainlink-light)" }}>./simulate.sh --broadcast</code>
+              </p>
               <div className="flex gap-2">
                 <button
                   onClick={() => callDemo("time-warp", { hours: 25 })}

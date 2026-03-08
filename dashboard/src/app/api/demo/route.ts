@@ -37,6 +37,10 @@ export async function POST(req: Request) {
       path: "/seed-arbitrator",
       body: { address: params.address },
     },
+    "set-uptime": {
+      path: "/set-uptime",
+      body: { uptime: params.uptime ?? 99.9 },
+    },
     reset: { path: "/reset" },
   };
 

@@ -59,7 +59,6 @@ const SLA_ABI = [
     outputs: [
       { internalType: "address", name: "provider", type: "address" },
       { internalType: "address", name: "tenant", type: "address" },
-      { internalType: "string", name: "serviceName", type: "string" },
       { internalType: "uint256", name: "bondAmount", type: "uint256" },
       { internalType: "uint256", name: "responseTimeHrs", type: "uint256" },
       { internalType: "uint256", name: "minUptimeBps", type: "uint256" },
@@ -336,7 +335,6 @@ function readSlaCount(
 type SLAData = {
   provider: Address;
   tenant: Address;
-  serviceName: string;
   bondAmount: bigint;
   minUptimeBps: bigint;
   penaltyBps: bigint;
@@ -355,20 +353,28 @@ function readSla(
     blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
   }).result();
 
-  const result = decodeFunctionResult({
-    abi: SLA_ABI,
-    functionName: "slas",
-    data: bytesToHex(reply.data),
-  }) as readonly [Address, Address, string, bigint, bigint, bigint, bigint, bigint, boolean];
+  // Decode manually — CRE's Javy WASM runtime can't handle BigInt > Number.MAX_SAFE_INTEGER
+  // in viem's decodeFunctionResult (e.g. bondAmount = 0.1 ETH = 10^17)
+  const hex = bytesToHex(reply.data);
+  const data = hex.slice(2); // remove 0x prefix
+  // Each ABI slot is 32 bytes = 64 hex chars
+  // Slots: 0=provider, 1=tenant, 2=bondAmount, 3=responseTimeHrs,
+  //        4=minUptimeBps, 5=penaltyBps, 6=createdAt, 7=active
+  const slot = (i: number): string => {
+    const s = data.slice(i * 64, (i + 1) * 64);
+    return s.length > 0 ? s : "0".repeat(64);
+  };
+  const addrFromSlot = (i: number) => getAddress(`0x${slot(i).slice(24)}`) as Address;
+  const numFromSlot = (i: number) => parseInt(slot(i), 16);
+  const boolFromSlot = (i: number) => parseInt(slot(i), 16) !== 0;
 
   return {
-    provider: result[0],
-    tenant: result[1],
-    serviceName: result[2],
-    bondAmount: result[3],
-    minUptimeBps: result[5],
-    penaltyBps: result[6],
-    active: result[8],
+    provider: addrFromSlot(0),
+    tenant: addrFromSlot(1),
+    bondAmount: BigInt(0), // not used in scan logic, skip large number parsing
+    minUptimeBps: BigInt(numFromSlot(4)),
+    penaltyBps: BigInt(numFromSlot(5)),
+    active: boolFromSlot(7),
   };
 }
 
