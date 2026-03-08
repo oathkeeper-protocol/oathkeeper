@@ -258,7 +258,11 @@ export default function Dashboard() {
                           >
                             {sla.active ? "Active" : "Inactive"}
                           </span>
-                          {riskScore !== undefined && <RiskBadge score={riskScore} />}
+                          {sla.latestVerdict === "PENALIZED" ? (
+                            <span className="px-2 py-0.5 rounded-md text-[11px] font-medium" style={{ color: "#ef4444", background: "rgba(239,68,68,0.1)" }}>Penalized</span>
+                          ) : riskScore !== undefined ? (
+                            <RiskBadge score={riskScore} />
+                          ) : null}
                         </div>
                         <p className="text-white text-[14px] font-medium mt-1.5">
                           {sla.serviceName || "Service"} <span className="font-mono text-[12px] ml-1" style={{ color: "var(--muted)" }}>{sla.provider.slice(0, 10)}...</span>
