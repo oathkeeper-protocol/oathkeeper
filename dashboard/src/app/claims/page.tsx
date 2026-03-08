@@ -1,11 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { formatEther } from "viem";
-import { SLA_CONTRACT_ADDRESS, SLA_ABI } from "@/lib/contract";
+import { useAccount } from "wagmi";
+import { useSearchParams } from "next/navigation";
 import { useTenantData } from "@/hooks/usePonderData";
 
 const fadeUp = {
@@ -17,70 +15,80 @@ const fadeUp = {
 };
 
 export default function Claims() {
-  const { address, isConnected } = useAccount();
-  const { slas, breaches, claims, claimedBreachSlaIds, isLoading, error } = useTenantData(address);
-  const [claimForm, setClaimForm] = useState({ slaId: "", description: "" });
+  const { address } = useAccount();
+  const searchParams = useSearchParams();
+  const paramTenant = searchParams.get("tenant");
 
-  const { writeContract, data: txHash, isPending, error: txError, reset } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+  // Use URL param if provided, otherwise connected wallet
+  const [tenantInput, setTenantInput] = useState("");
+  const activeTenant = paramTenant || tenantInput || address;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    reset();
-    writeContract({
-      address: SLA_CONTRACT_ADDRESS,
-      abi: SLA_ABI,
-      functionName: "fileClaim",
-      args: [BigInt(claimForm.slaId), claimForm.description],
-    });
-  };
+  useEffect(() => {
+    if (paramTenant) setTenantInput(paramTenant);
+  }, [paramTenant]);
 
-  const fileClaim = (slaId: string) => {
-    setClaimForm({ slaId, description: `Breach detected on SLA #${slaId} — requesting penalty enforcement` });
-  };
+  const { slas, breaches, claims, claimedBreachSlaIds, isLoading, error } = useTenantData(activeTenant);
 
-  const isTxLoading = isPending || isConfirming;
   const totalPenalties = breaches.reduce((sum, b) => sum + Number(b.penaltyAmount) / 1e18, 0);
 
   return (
     <div className="max-w-4xl mx-auto">
       <motion.div initial="hidden" animate="visible" className="space-y-8">
         <motion.div custom={0} variants={fadeUp}>
-          <h1 className="text-2xl md:text-3xl font-semibold text-white tracking-tight mb-1">Claims</h1>
+          <h1 className="text-2xl md:text-3xl font-semibold text-white tracking-tight mb-1">Tenant View</h1>
           <p className="text-[14px]" style={{ color: "var(--muted)" }}>
-            View breaches on your SLAs and file claims to trigger penalty enforcement.
+            View SLA agreements, breach history, and penalty payouts for a tenant address.
           </p>
         </motion.div>
 
-        {!isConnected ? (
-          <motion.div custom={1} variants={fadeUp} className="glass-card glass-card-glow rounded-2xl p-8 text-center">
-            <p className="text-[14px] mb-4" style={{ color: "var(--muted)" }}>Connect your tenant wallet to view your SLAs and file claims.</p>
-            <ConnectButton />
+        {/* Tenant address input */}
+        <motion.div custom={1} variants={fadeUp} className="glass-card rounded-xl p-4">
+          <div className="flex items-center gap-3">
+            <label className="text-[12px] font-medium shrink-0" style={{ color: "var(--muted)" }}>Tenant</label>
+            <input
+              type="text"
+              value={tenantInput || activeTenant || ""}
+              onChange={e => setTenantInput(e.target.value)}
+              placeholder="0x... (or connect wallet)"
+              className="flex-1 py-2 px-3 rounded-lg text-[13px] font-mono text-white bg-transparent outline-none"
+              style={{ border: "1px solid var(--card-border)" }}
+            />
+          </div>
+          {activeTenant && (
+            <p className="text-[11px] font-mono mt-2" style={{ color: "var(--muted)" }}>
+              Viewing: {activeTenant}
+            </p>
+          )}
+        </motion.div>
+
+        {!activeTenant ? (
+          <motion.div custom={2} variants={fadeUp} className="glass-card glass-card-glow rounded-2xl p-8 text-center">
+            <p className="text-[14px]" style={{ color: "var(--muted)" }}>Enter a tenant address or connect a wallet to view SLAs.</p>
           </motion.div>
         ) : isLoading ? (
-          <motion.div custom={1} variants={fadeUp} className="text-center py-12">
+          <motion.div custom={2} variants={fadeUp} className="text-center py-12">
             <div className="inline-block w-6 h-6 border-2 border-white/20 border-t-white rounded-full animate-spin" />
           </motion.div>
         ) : error ? (
-          <motion.div custom={1} variants={fadeUp} className="glass-card rounded-2xl p-6">
+          <motion.div custom={2} variants={fadeUp} className="glass-card rounded-2xl p-6">
             <p className="text-red-400 text-[13px]">Ponder error: {error}</p>
           </motion.div>
         ) : slas.length === 0 ? (
-          <motion.div custom={1} variants={fadeUp} className="glass-card glass-card-glow rounded-2xl p-8 text-center">
-            <p className="text-[15px] text-white mb-2">No SLAs found for this wallet</p>
+          <motion.div custom={2} variants={fadeUp} className="glass-card glass-card-glow rounded-2xl p-8 text-center">
+            <p className="text-[15px] text-white mb-2">No SLAs found</p>
             <p className="text-[13px]" style={{ color: "var(--muted)" }}>
-              You are not a tenant on any active SLA. SLAs are created by providers with your address as tenant.
+              This address is not a tenant on any SLA.
             </p>
           </motion.div>
         ) : (
           <>
             {/* Stats */}
-            <motion.div custom={1} variants={fadeUp} className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <motion.div custom={2} variants={fadeUp} className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
-                { label: "Your SLAs", value: slas.length },
-                { label: "Total Breaches", value: breaches.length },
-                { label: "Claims Filed", value: claims.length },
+                { label: "SLA Agreements", value: slas.length },
+                { label: "Breaches Detected", value: breaches.length },
                 { label: "Penalties Received", value: `${totalPenalties.toFixed(4)} ETH` },
+                { label: "Claims Filed", value: claims.length },
               ].map((stat) => (
                 <div key={stat.label} className="glass-card rounded-xl p-4">
                   <p className="text-[11px] font-medium mb-1" style={{ color: "var(--muted)" }}>{stat.label}</p>
@@ -89,20 +97,20 @@ export default function Claims() {
               ))}
             </motion.div>
 
-            {/* Your SLAs */}
-            <motion.div custom={2} variants={fadeUp}>
-              <h2 className="text-[15px] font-semibold text-white mb-3">Your SLA Agreements</h2>
+            {/* SLA Agreements */}
+            <motion.div custom={3} variants={fadeUp}>
+              <h2 className="text-[15px] font-semibold text-white mb-3">SLA Agreements</h2>
               <div className="space-y-3">
                 {slas.map((sla) => {
                   const slaBreaches = breaches.filter(b => b.slaId === sla.slaId);
-                  const hasClaim = claimedBreachSlaIds.has(sla.slaId);
-                  const hasUnclaimedBreach = slaBreaches.length > 0 && !hasClaim;
+                  const hasBreach = slaBreaches.length > 0;
+                  const slaPenalties = slaBreaches.reduce((s, b) => s + Number(b.penaltyAmount) / 1e18, 0);
 
                   return (
                     <div
                       key={sla.id}
                       className="glass-card rounded-xl p-4"
-                      style={hasUnclaimedBreach ? { border: "1px solid rgba(239,68,68,0.3)" } : undefined}
+                      style={hasBreach ? { border: "1px solid rgba(239,68,68,0.3)" } : undefined}
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
@@ -117,41 +125,40 @@ export default function Claims() {
                             >
                               {sla.active ? "Active" : "Inactive"}
                             </span>
-                            {hasUnclaimedBreach && (
+                            {hasBreach && (
                               <span
                                 className="px-1.5 py-0.5 rounded text-[10px] font-medium"
                                 style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444" }}
                               >
-                                BREACHED
-                              </span>
-                            )}
-                            {hasClaim && (
-                              <span
-                                className="px-1.5 py-0.5 rounded text-[10px] font-medium"
-                                style={{ background: "rgba(55,91,210,0.1)", color: "var(--chainlink-light)" }}
-                              >
-                                CLAIMED
+                                {slaBreaches.length} BREACH{slaBreaches.length > 1 ? "ES" : ""}
                               </span>
                             )}
                           </div>
                           <p className="text-[13px] text-white">{sla.serviceName}</p>
                           <p className="text-[11px] mt-1" style={{ color: "var(--muted)" }}>
-                            Min uptime: {Number(sla.minUptimeBps) / 100}% &middot; Penalty: {Number(sla.penaltyBps) / 100}% &middot; Bond: {(Number(sla.bondAmount) / 1e18).toFixed(4)} ETH
+                            Provider: {sla.provider.slice(0, 10)}... &middot; Min uptime: {Number(sla.minUptimeBps) / 100}% &middot; Penalty: {Number(sla.penaltyBps) / 100}%
                           </p>
-                          {slaBreaches.length > 0 && (
-                            <p className="text-[11px] mt-1" style={{ color: "rgba(239,68,68,0.7)" }}>
-                              {slaBreaches.length} breach{slaBreaches.length > 1 ? "es" : ""} &middot; {slaBreaches.reduce((s, b) => s + Number(b.penaltyAmount) / 1e18, 0).toFixed(4)} ETH penalized
-                            </p>
-                          )}
+                          <div className="flex items-center gap-4 mt-2">
+                            <span className="text-[12px]" style={{ color: "var(--muted)" }}>
+                              Bond: <span className="text-white font-mono">{(Number(sla.bondAmount) / 1e18).toFixed(4)} ETH</span>
+                            </span>
+                            {hasBreach && (
+                              <span className="text-[12px]" style={{ color: "rgba(74,222,128,0.8)" }}>
+                                Penalties paid: <span className="font-mono">{slaPenalties.toFixed(4)} ETH</span>
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        {hasUnclaimedBreach && (
-                          <button
-                            onClick={() => fileClaim(sla.slaId)}
-                            className="shrink-0 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors"
-                            style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
+                        {sla.latestRiskScore !== null && sla.latestRiskScore > 0 && (
+                          <div
+                            className="shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium"
+                            style={{
+                              background: sla.latestRiskScore >= 70 ? "rgba(239,68,68,0.1)" : sla.latestRiskScore >= 50 ? "rgba(245,158,11,0.1)" : "rgba(74,222,128,0.1)",
+                              color: sla.latestRiskScore >= 70 ? "#ef4444" : sla.latestRiskScore >= 50 ? "#f59e0b" : "rgba(74,222,128,0.8)",
+                            }}
                           >
-                            File Claim
-                          </button>
+                            Risk: {sla.latestRiskScore}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -160,59 +167,10 @@ export default function Claims() {
               </div>
             </motion.div>
 
-            {/* File Claim Form */}
-            {claimForm.slaId && (
-              <motion.div
-                custom={3}
-                variants={fadeUp}
-                initial="hidden"
-                animate="visible"
-                className="glass-card glass-card-glow rounded-2xl p-6"
-              >
-                <h2 className="text-[15px] font-semibold text-white mb-4">File Claim — SLA #{claimForm.slaId}</h2>
-                <form onSubmit={handleSubmit} className="space-y-4">
-                  <div>
-                    <label className="block text-[13px] mb-1.5" style={{ color: "var(--muted)" }}>Description</label>
-                    <textarea
-                      value={claimForm.description}
-                      onChange={e => setClaimForm({ ...claimForm, description: e.target.value })}
-                      rows={3}
-                      className="w-full px-4 py-2.5 rounded-lg text-white text-[14px] resize-none"
-                      required
-                    />
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <button type="submit" disabled={isTxLoading} className="btn-primary px-6 py-2.5 text-[14px]">
-                      {isTxLoading ? "Submitting..." : "Submit Claim On-Chain"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setClaimForm({ slaId: "", description: "" }); reset(); }}
-                      className="px-4 py-2.5 rounded-lg text-[13px] transition-colors"
-                      style={{ color: "var(--muted)", border: "1px solid var(--card-border)" }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  {txHash && !isSuccess && (
-                    <p className="text-[12px] font-mono" style={{ color: "var(--muted)" }}>Tx: {txHash.slice(0, 20)}... confirming...</p>
-                  )}
-                  {isSuccess && (
-                    <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-[13px]" style={{ color: "rgba(74,222,128,0.8)" }}>
-                      Claim filed on-chain successfully.
-                    </motion.p>
-                  )}
-                  {txError && <p className="text-red-400 text-[13px]">{txError.message.split("\n")[0]}</p>}
-                </form>
-              </motion.div>
-            )}
-
-            {/* Recent Breaches */}
-            <motion.div custom={4} variants={fadeUp}>
-              <h2 className="text-[15px] font-semibold text-white mb-3">Breach History</h2>
-              {breaches.length === 0 ? (
-                <p className="text-[13px]" style={{ color: "var(--muted)" }}>No breaches detected on your SLAs yet.</p>
-              ) : (
+            {/* Breach History */}
+            {breaches.length > 0 && (
+              <motion.div custom={4} variants={fadeUp}>
+                <h2 className="text-[15px] font-semibold text-white mb-3">Breach History</h2>
                 <div className="overflow-x-auto">
                   <table className="w-full text-[13px]">
                     <thead>
@@ -220,7 +178,7 @@ export default function Claims() {
                         <th className="text-left py-2 font-medium">SLA</th>
                         <th className="text-left py-2 font-medium">Uptime</th>
                         <th className="text-left py-2 font-medium">Penalty</th>
-                        <th className="text-left py-2 font-medium">Status</th>
+                        <th className="text-left py-2 font-medium">Block</th>
                         <th className="text-left py-2 font-medium">Tx</th>
                       </tr>
                     </thead>
@@ -230,13 +188,7 @@ export default function Claims() {
                           <td className="py-3 text-white font-medium">#{b.slaId}</td>
                           <td className="py-3" style={{ color: "rgba(239,68,68,0.7)" }}>{(Number(b.uptimeBps) / 100).toFixed(1)}%</td>
                           <td className="py-3 text-white">{(Number(b.penaltyAmount) / 1e18).toFixed(4)} ETH</td>
-                          <td className="py-3">
-                            {claimedBreachSlaIds.has(b.slaId) ? (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: "rgba(55,91,210,0.1)", color: "var(--chainlink-light)" }}>Claimed</span>
-                            ) : (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: "rgba(245,158,11,0.1)", color: "#f59e0b" }}>Unclaimed</span>
-                            )}
-                          </td>
+                          <td className="py-3 font-mono" style={{ color: "var(--muted)" }}>{b.blockNumber}</td>
                           <td className="py-3">
                             <a
                               href={`${process.env.NEXT_PUBLIC_TENDERLY_EXPLORER}/tx/${b.transactionHash}`}
@@ -252,34 +204,6 @@ export default function Claims() {
                       ))}
                     </tbody>
                   </table>
-                </div>
-              )}
-            </motion.div>
-
-            {/* Filed Claims */}
-            {claims.length > 0 && (
-              <motion.div custom={5} variants={fadeUp}>
-                <h2 className="text-[15px] font-semibold text-white mb-3">Your Claims</h2>
-                <div className="space-y-2">
-                  {claims.map((c) => (
-                    <div key={c.id} className="glass-card rounded-xl p-3 flex items-center justify-between">
-                      <div>
-                        <p className="text-white text-[13px] font-medium">Claim #{c.claimId} — SLA #{c.slaId}</p>
-                        <p className="text-[11px] font-mono mt-0.5" style={{ color: "var(--muted)" }}>
-                          Block {c.blockNumber}
-                        </p>
-                      </div>
-                      <a
-                        href={`${process.env.NEXT_PUBLIC_TENDERLY_EXPLORER}/tx/${c.transactionHash}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[11px] font-mono underline"
-                        style={{ color: "var(--muted)" }}
-                      >
-                        {c.transactionHash.slice(0, 10)}...
-                      </a>
-                    </div>
-                  ))}
                 </div>
               </motion.div>
             )}
