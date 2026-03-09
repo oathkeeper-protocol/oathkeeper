@@ -38,6 +38,8 @@ The protocol uses 5 CRE capabilities (cron trigger, EVM log trigger, Confidentia
 | **World Chain VNet Explorer** | [Tenderly Explorer](https://dashboard.tenderly.co/robbyn/project/testnet/d8f04de9-4cc1-4066-b8d3-31ed51ee1d85) |
 
 > **Demo Video:** [Watch on YouTube](https://youtu.be/qdYT-sjarpI)
+>
+> **Pitch Deck:** [View Pitch Deck](https://oathlayer-protocol.github.io/app/pitchdeck.html)
 
 ---
 
