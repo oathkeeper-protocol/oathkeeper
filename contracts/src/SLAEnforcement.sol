@@ -55,6 +55,7 @@ contract SLAEnforcement {
         address tenant;
         string serviceName;    // e.g. "Cloud Hosting — EU-West"
         uint256 bondAmount;
+        uint256 initialBondAmount; // original bond — penalty always calculated from this
         uint256 responseTimeHrs;
         uint256 minUptimeBps;  // e.g. 9950 = 99.50%
         uint256 penaltyBps;    // e.g. 500 = 5%
@@ -225,6 +226,7 @@ contract SLAEnforcement {
             tenant: tenant,
             serviceName: serviceName,
             bondAmount: msg.value,
+            initialBondAmount: msg.value,
             responseTimeHrs: responseTimeHrs,
             minUptimeBps: minUptimeBps,
             penaltyBps: penaltyBps,
@@ -264,8 +266,8 @@ contract SLAEnforcement {
         require(lastBreachTime[slaId] == 0 || block.timestamp - lastBreachTime[slaId] >= 24 hours, "Breach cooldown");
         lastBreachTime[slaId] = block.timestamp;
 
-        uint256 penaltyAmount = (sla.bondAmount * sla.penaltyBps) / 10000;
-        require(penaltyAmount <= sla.bondAmount, "Penalty exceeds bond");
+        uint256 penaltyAmount = (sla.initialBondAmount * sla.penaltyBps) / 10000;
+        if (penaltyAmount > sla.bondAmount) penaltyAmount = sla.bondAmount;
 
         sla.bondAmount -= penaltyAmount;
         if (sla.bondAmount == 0) {

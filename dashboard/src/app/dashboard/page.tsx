@@ -136,9 +136,9 @@ function TribunalBadge({ tally, penalized }: { tally: string; penalized: boolean
   const voteMatch = tally.match(/^(\d+-\d+)/);
   const votes = voteMatch ? voteMatch[1] : "";
 
-  const label = penalized ? "PENALIZED" : isBreach ? "WARNING" : isWarning ? "WARNING" : isClear ? "CLEAR" : "ASSESSED";
-  const color = penalized ? "#ef4444" : (isBreach || isWarning) ? "#f59e0b" : "rgba(74,222,128,0.8)";
-  const bg = penalized ? "rgba(239,68,68,0.1)" : (isBreach || isWarning) ? "rgba(245,158,11,0.1)" : "rgba(74,222,128,0.08)";
+  const label = penalized ? "PENALIZED" : isBreach ? "BREACH" : isWarning ? "WARNING" : isClear ? "CLEAR" : "ASSESSED";
+  const color = penalized ? "#ef4444" : isBreach ? "#ef4444" : isWarning ? "#f59e0b" : "rgba(74,222,128,0.8)";
+  const bg = penalized ? "rgba(239,68,68,0.1)" : isBreach ? "rgba(239,68,68,0.1)" : isWarning ? "rgba(245,158,11,0.1)" : "rgba(74,222,128,0.08)";
 
   return (
     <span
@@ -258,7 +258,7 @@ export default function Dashboard() {
                           >
                             {sla.active ? "Active" : "Inactive"}
                           </span>
-                          {sla.latestVerdict === "PENALIZED" ? (
+                          {sla.breachCount > 0 ? (
                             <span className="px-2 py-0.5 rounded-md text-[11px] font-medium" style={{ color: "#ef4444", background: "rgba(239,68,68,0.1)" }}>Penalized</span>
                           ) : riskScore !== undefined ? (
                             <RiskBadge score={riskScore} />

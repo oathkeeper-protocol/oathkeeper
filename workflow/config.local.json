@@ -1,8 +1,9 @@
 {
-  "slaContractAddress": "0x7c8C2E0D488d2785040171f4C087B0EA7637DE91",
+  "slaContractAddress": "0xcb08eaa01e2ab1adbb1b567d7c7e837e4a4661be",
   "uptimeApiUrl": "https://oathlayer-api.robbyn.xyz",
   "complianceApiUrl": "https://oathlayer-api.robbyn.xyz",
   "chainSelectorName": "ethereum-testnet-sepolia",
   "worldChainContractAddress": "",
-  "worldChainSelector": ""
+  "worldChainSelector": "",
+  "startSlaId": 5
 }

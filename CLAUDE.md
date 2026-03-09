@@ -47,7 +47,7 @@ Mock API's `/demo-breach` replicates the same logic for demo convenience (bypass
 
 ## Deployment
 
-- **SLAEnforcement**: OathLayer VNet (Sepolia fork, State Sync ON) — `0x7c8C2E0D488d2785040171f4C087B0EA7637DE91`
+- **SLAEnforcement**: OathLayer VNet (Sepolia fork, State Sync ON) — `0xcb08eaa01e2ab1adbb1b567d7c7e837e4a4661be`
 - **WorldChainRegistry**: OathLayer World Chain VNet (World Chain Sepolia fork, State Sync ON) — `0xe1349d2c44422b70c73bf767afb58ae1c59cd1fd`
 - **Sepolia VNet RPC**: `https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d`
 - **World Chain VNet RPC**: `https://virtual.worldchain-sepolia.eu.rpc.tenderly.co/d8f04de9-4cc1-4066-b8d3-31ed51ee1d85`

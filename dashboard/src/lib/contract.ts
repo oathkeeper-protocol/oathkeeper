@@ -40,6 +40,7 @@ export const SLA_ABI = [
       { internalType: "address", name: "tenant", type: "address" },
       { internalType: "string", name: "serviceName", type: "string" },
       { internalType: "uint256", name: "bondAmount", type: "uint256" },
+      { internalType: "uint256", name: "initialBondAmount", type: "uint256" },
       { internalType: "uint256", name: "responseTimeHrs", type: "uint256" },
       { internalType: "uint256", name: "minUptimeBps", type: "uint256" },
       { internalType: "uint256", name: "penaltyBps", type: "uint256" },

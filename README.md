@@ -37,7 +37,7 @@ The protocol uses 5 CRE capabilities (cron trigger, EVM log trigger, Confidentia
 | **Sepolia VNet Explorer** | [Tenderly Explorer](https://dashboard.tenderly.co/robbyn/project/testnet/5c780e4f-4df5-4a50-b221-2342cd4b713e) |
 | **World Chain VNet Explorer** | [Tenderly Explorer](https://dashboard.tenderly.co/robbyn/project/testnet/d8f04de9-4cc1-4066-b8d3-31ed51ee1d85) |
 
-> **Demo Video:** [Coming soon — YouTube link]
+> **Demo Video:** [Watch on YouTube](https://youtu.be/qdYT-sjarpI)
 
 ---
 
@@ -151,7 +151,7 @@ OathLayer runs on **two Tenderly Virtual TestNets** with State Sync enabled — 
 
 | Contract | Chain | Address |
 |---|---|---|
-| `SLAEnforcement` | OathLayer VNet (Sepolia fork, 11155111) | `0x7c8C2E0D488d2785040171f4C087B0EA7637DE91` |
+| `SLAEnforcement` | OathLayer VNet (Sepolia fork, 11155111) | `0xcb08eaa01e2ab1adbb1b567d7c7e837e4a4661be` |
 | `WorldChainRegistry` | OathLayer World Chain VNet (World Chain Sepolia fork, 4801) | `0xe1349d2c44422b70c73bf767afb58ae1c59cd1fd` |
 
 **Tenderly Explorers:**
@@ -394,7 +394,7 @@ cd dashboard && npm run dev
 
 # 3. Fund wallet + register provider via Tenderly impersonation (terminal 3)
 export TENDERLY_RPC=https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d
-export SLA=0x7c8C2E0D488d2785040171f4C087B0EA7637DE91
+export SLA=0xcb08eaa01e2ab1adbb1b567d7c7e837e4a4661be
 export CRE_FWD=0x4B2fF22FFeb81292F8511a8eB370C4F7Aa656d9B
 
 cast rpc tenderly_setBalance <YOUR_ADDRESS> 0x56BC75E2D63100000 --rpc-url $TENDERLY_RPC
@@ -502,3 +502,4 @@ Two VNets with State Sync enabled — Sepolia fork for enforcement and World Cha
 - Arbitration reversal has no on-chain enforcement in V1
 - ComplianceStatus has no expiry mechanism
 - `scanSLAs` is O(N) with N separate consensus rounds — fine at demo scale
+- CRE enforces a hard limit of 10 `writeReport` calls per workflow execution. The workflow budgets breaches first, then warnings, and skips lower-priority writes when the budget is exhausted. At scale, a contract-side batch function (`recordBreachBatch`) would allow unlimited SLAs per run.

@@ -125,7 +125,7 @@ contract SLAEnforcementTest is Test {
         vm.prank(provider);
         uint256 slaId = slaContract.createSLA{value: 1 ether}(tenant, "Cloud Hosting - US-East", 48, 9950, 500);
 
-        (address p, address t,, uint256 bond, uint256 hrs, uint256 uptime, uint256 penalty,, bool active) = slaContract.slas(slaId);
+        (address p, address t,, uint256 bond,, uint256 hrs, uint256 uptime, uint256 penalty,, bool active) = slaContract.slas(slaId);
         assertEq(p, provider);
         assertEq(t, tenant);
         assertEq(bond, 1 ether);
@@ -190,7 +190,7 @@ contract SLAEnforcementTest is Test {
         vm.prank(creForwarder);
         slaContract.recordBreach(slaId, 9800); // penaltyBps read from SLA storage (500 = 5%)
 
-        (,,, uint256 bondAfter,,,,, bool active) = slaContract.slas(slaId);
+        (,,, uint256 bondAfter,,,,,, bool active) = slaContract.slas(slaId);
         assertEq(bondAfter, 0.95 ether);
         assertEq(tenant.balance - tenantBalBefore, 0.05 ether);
         assertTrue(active);
@@ -205,7 +205,7 @@ contract SLAEnforcementTest is Test {
         vm.prank(creForwarder);
         slaContract.recordBreach(slaId, 9800);
 
-        (,,, uint256 bondAfter,,,,, bool active) = slaContract.slas(slaId);
+        (,,, uint256 bondAfter,,,,,, bool active) = slaContract.slas(slaId);
         assertEq(bondAfter, 0);
         assertFalse(active);
     }

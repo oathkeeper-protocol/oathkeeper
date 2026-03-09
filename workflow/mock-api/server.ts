@@ -27,7 +27,7 @@ const SLA_ABI = parseAbi([
   'function fileClaim(uint256 slaId, string description) external',
   'function registerArbitratorRelayed(address user, uint256 nullifierHash) external',
   'function verifiedArbitrators(address) view returns (bool)',
-  'function slas(uint256) view returns (address provider, address tenant, string serviceName, uint256 bondAmount, uint256 responseTimeHrs, uint256 minUptimeBps, uint256 penaltyBps, uint256 breachCount, bool active)',
+  'function slas(uint256) view returns (address provider, address tenant, string serviceName, uint256 bondAmount, uint256 initialBondAmount, uint256 responseTimeHrs, uint256 minUptimeBps, uint256 penaltyBps, uint256 createdAt, bool active)',
   'function slaCount() view returns (uint256)',
 ]);
 
@@ -47,60 +47,93 @@ const providerUptime: Record<string, number> = {};
 let globalUptime = 99.9; // Default uptime for unknown providers
 
 // --- AI Tribunal Council (ported from workflow/workflow.ts) ---
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const GROQ_API_KEYS = [
+  process.env.GROQ_API_KEY || '',
+  process.env.GROQ_API_KEY_2 || '',
+  process.env.GROQ_API_KEY_3 || '',
+].filter(Boolean);
+const GROQ_API_KEY = GROQ_API_KEYS[0] || '';
 
 type AgentVote = { vote: 'BREACH' | 'WARNING' | 'NO_BREACH'; confidence: number; reasoning: string };
 type SLAVote = { slaId: number; vote: AgentVote };
 type TribunalVerdict = { slaId: number; action: 'BREACH' | 'WARNING' | 'NONE'; tally: string; summary: string; riskScore: number };
 
 const TRIBUNAL_PROMPTS = {
-  riskAnalyst: `You are a Risk Analyst for an SLA enforcement system. Analyze uptime metrics and predict breach probability in the next 24 hours. Be data-driven and objective. Consider current metrics against SLA thresholds and trend direction.
+  riskAnalyst: `You are a Risk Analyst for an SLA enforcement system. Analyze uptime metrics and vote based on these rules:
 
-For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+VOTING RULES (uptimeBps = current uptime, minUptimeBps = SLA threshold):
+- BREACH: uptimeBps < minUptimeBps (below threshold — SLA violated)
+- WARNING: uptimeBps >= minUptimeBps BUT within 5% above threshold (e.g. threshold 9500, uptime 9500-9975 = warning zone)
+- NO_BREACH: uptimeBps > minUptimeBps + 5% buffer (healthy, well above threshold)
+
+Be data-driven and objective. Set confidence based on how far from the threshold the uptime is.
+
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 80 chars>"}
 
 Respond with a JSON array of votes for all SLAs.`,
 
-  providerAdvocate: (analystAssessment: string) => `You are a Provider Advocate defending infrastructure providers against wrongful SLA penalties. Your job is to protect providers from false slashing.
+  providerAdvocate: (analystAssessment: string) => `You are a Provider Advocate defending infrastructure providers against wrongful SLA penalties.
 
 The Risk Analyst has assessed: ${analystAssessment}
 
-Find mitigating factors: temporary dips, maintenance windows, recovery trends in historical data, measurement noise, or threshold proximity that doesn't warrant action.
+VOTING RULES (uptimeBps = current uptime, minUptimeBps = SLA threshold):
+- BREACH: uptimeBps < minUptimeBps (below threshold — this is non-negotiable, the SLA is violated)
+- WARNING: uptimeBps >= minUptimeBps BUT within 5% above threshold — defend the provider but flag risk
+- NO_BREACH: uptimeBps > minUptimeBps + 5% buffer — provider is healthy, advocate for clearance
 
-Your bias is to PROTECT providers. Only vote BREACH if evidence is absolutely undeniable despite your best defense.
+IMPORTANT: If uptimeBps < minUptimeBps, you MUST vote BREACH. You cannot defend against math.
+Your advocacy applies to borderline cases (WARNING zone) and severity assessment, not denying hard breaches.
 
-For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 80 chars>"}
 
 Respond with a JSON array of votes for all SLAs.`,
 
-  enforcementJudge: (analystAssessment: string, advocateDefense: string) => `You are the Enforcement Judge in an SLA tribunal. You must weigh the Risk Analyst's findings against the Provider Advocate's defense and render a fair verdict.
+  enforcementJudge: (analystAssessment: string, advocateDefense: string) => `You are the Enforcement Judge in an SLA tribunal. Weigh the Risk Analyst's findings against the Provider Advocate's defense.
 
 Risk Analyst says: ${analystAssessment}
 Provider Advocate says: ${advocateDefense}
 
-Only vote BREACH if evidence is overwhelming despite the defense. Your vote is the tiebreaker — be deliberate.
+VOTING RULES (uptimeBps = current uptime, minUptimeBps = SLA threshold):
+- BREACH: uptimeBps < minUptimeBps and defense is insufficient — penalize
+- WARNING: uptimeBps is close to threshold (within 5% above) — issue warning, no penalty
+- NO_BREACH: uptime is healthy or defense is convincing — clear the provider
 
-For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+Your vote is the tiebreaker — be deliberate and fair.
+
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 80 chars>"}
 
 Respond with a JSON array of votes for all SLAs.`,
 };
 
-async function callGroqAgent(systemPrompt: string, userPrompt: string, temperature = 0): Promise<SLAVote[]> {
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      max_tokens: 1024,
-      temperature,
-      response_format: { type: 'json_object' },
-    }),
-  });
+async function callGroqAgent(systemPrompt: string, userPrompt: string, temperature = 0, apiKey?: string): Promise<SLAVote[]> {
+  const key = apiKey || GROQ_API_KEY;
+  const MAX_RETRIES = 3;
+  let res: Response | undefined;
 
-  if (!res.ok) throw new Error(`Groq API HTTP ${res.status}`);
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: 1024,
+        temperature,
+        response_format: { type: 'json_object' },
+      }),
+    });
+    if (res.ok) break;
+    if (res.status === 429 && attempt < MAX_RETRIES - 1) {
+      console.log(`[MockAPI] Groq 429 — retry ${attempt + 1}/${MAX_RETRIES}, waiting 2s`);
+      await new Promise(r => setTimeout(r, 2000));
+      continue;
+    }
+  }
+
+  if (!res!.ok) throw new Error(`Groq API HTTP ${res!.status}`);
   const body = await res.json() as { choices: { message: { content: string } }[] };
   const content = body.choices[0]?.message?.content;
   if (!content) throw new Error('Groq returned empty response');
@@ -171,7 +204,7 @@ function tallyVotes(slaId: number, analyst?: AgentVote, advocate?: AgentVote, ju
   if (breachVotes.length === votes.length) {
     action = 'BREACH'; tally = `${votes.length}-0 BREACH`;
   } else if (breachVotes.length > votes.length / 2) {
-    action = 'WARNING'; tally = `${breachVotes.length}-${againstVotes} BREACH`;
+    action = 'BREACH'; tally = `${breachVotes.length}-${againstVotes} BREACH`;
   } else if (noBreachVotes.length === votes.length) {
     action = 'NONE'; tally = `0-${votes.length} CLEAR`;
   } else if (forVotes > againstVotes) {
@@ -207,15 +240,15 @@ async function runTribunal(metrics: { slaId: number; provider: string; uptimeBps
   const metricsJson = JSON.stringify(metricsWithHistory);
 
   console.log('[Tribunal] Risk Analyst evaluating...');
-  const analystVotes = await callGroqAgent(TRIBUNAL_PROMPTS.riskAnalyst, `Current SLA metrics with 7-day history:\n${metricsJson}`, 0);
+  const analystVotes = await callGroqAgent(TRIBUNAL_PROMPTS.riskAnalyst, `Current SLA metrics with 7-day history:\n${metricsJson}`, 0, GROQ_API_KEYS[0]);
   const analystSummary = JSON.stringify(analystVotes.map(v => ({ slaId: v.slaId, vote: v.vote.vote, confidence: v.vote.confidence, reasoning: v.vote.reasoning })));
 
   console.log('[Tribunal] Provider Advocate defending...');
-  const advocateVotes = await callGroqAgent(TRIBUNAL_PROMPTS.providerAdvocate(analystSummary), `Current SLA metrics with 7-day history:\n${metricsJson}`, 0.3);
+  const advocateVotes = await callGroqAgent(TRIBUNAL_PROMPTS.providerAdvocate(analystSummary), `Current SLA metrics with 7-day history:\n${metricsJson}`, 0.3, GROQ_API_KEYS[1] || GROQ_API_KEYS[0]);
   const advocateSummary = JSON.stringify(advocateVotes.map(v => ({ slaId: v.slaId, vote: v.vote.vote, confidence: v.vote.confidence, reasoning: v.vote.reasoning })));
 
   console.log('[Tribunal] Enforcement Judge deliberating...');
-  const judgeVotes = await callGroqAgent(TRIBUNAL_PROMPTS.enforcementJudge(analystSummary, advocateSummary), `Current SLA metrics with 7-day history:\n${metricsJson}`, 0);
+  const judgeVotes = await callGroqAgent(TRIBUNAL_PROMPTS.enforcementJudge(analystSummary, advocateSummary), `Current SLA metrics with 7-day history:\n${metricsJson}`, 0, GROQ_API_KEYS[2] || GROQ_API_KEYS[0]);
 
   return metrics.map((m, idx) => {
     // Match by slaId first, fall back to index (LLMs often return slaId: 0 for single-SLA queries)
@@ -381,12 +414,12 @@ app.post('/demo-breach', requireAdminAuth, async (req: Request, res: Response) =
     const targets: { id: number; provider: string; minUptimeBps: number }[] = [];
     if (slaId !== null && slaId !== undefined) {
       const data = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slas', args: [BigInt(slaId)] });
-      targets.push({ id: slaId, provider: data[0], minUptimeBps: Number(data[5]) });
+      targets.push({ id: slaId, provider: data[0], minUptimeBps: Number(data[6]) });
     } else {
       const count = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slaCount' });
       for (let i = 0; i < Number(count); i++) {
         const data = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slas', args: [BigInt(i)] });
-        if (data[8]) targets.push({ id: i, provider: data[0], minUptimeBps: Number(data[5]) });
+        if (data[9]) targets.push({ id: i, provider: data[0], minUptimeBps: Number(data[6]) });
       }
     }
 
@@ -474,12 +507,12 @@ app.post('/demo-warning', requireAdminAuth, async (req: Request, res: Response) 
     const targets: { id: number; provider: string; minUptimeBps: number }[] = [];
     if (slaId !== null && slaId !== undefined) {
       const data = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slas', args: [BigInt(slaId)] });
-      targets.push({ id: slaId, provider: data[0], minUptimeBps: Number(data[5]) });
+      targets.push({ id: slaId, provider: data[0], minUptimeBps: Number(data[6]) });
     } else {
       const count = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slaCount' });
       for (let i = 0; i < Number(count); i++) {
         const data = await publicClient.readContract({ address: CONTRACT, abi: SLA_ABI, functionName: 'slas', args: [BigInt(i)] });
-        targets.push({ id: i, provider: data[0], minUptimeBps: Number(data[5]) });
+        targets.push({ id: i, provider: data[0], minUptimeBps: Number(data[6]) });
       }
     }
 
@@ -654,6 +687,62 @@ app.post('/seed-arbitrator', requireAdminAuth, async (req: Request, res: Respons
   }
 });
 
+// --- CRE Execution Endpoints ---
+// Called by CRE workflow to execute on-chain writes (since CRE simulation can't broadcast)
+
+// CRE bulk execution endpoint — single POST handles all breaches + warnings + clears
+// Called once per CRE workflow run via ConfidentialHTTPClient
+type CREAction = {
+  type: 'breach' | 'warning' | 'clear';
+  slaId: number;
+  uptimeBps?: number;
+  riskScore?: number;
+  prediction?: string;
+};
+
+app.post('/cre/execute', requireAdminAuth, async (req: Request, res: Response) => {
+  if (!walletClient || !CONTRACT) {
+    res.status(500).json({ error: 'Wallet not configured' });
+    return;
+  }
+  const { actions } = req.body as { actions?: CREAction[] };
+  if (!actions || !Array.isArray(actions) || actions.length === 0) {
+    res.status(400).json({ error: 'actions array required' });
+    return;
+  }
+
+  const results: { slaId: number; type: string; ok: boolean; tx?: string; error?: string }[] = [];
+
+  for (const action of actions) {
+    try {
+      if (action.type === 'breach') {
+        const hash = await walletClient.writeContract({
+          address: CONTRACT, abi: SLA_ABI, functionName: 'recordBreach',
+          args: [BigInt(action.slaId), BigInt(action.uptimeBps ?? 0)],
+        });
+        console.log(`[MockAPI] CRE breach SLA ${action.slaId} tx: ${hash}`);
+        results.push({ slaId: action.slaId, type: 'breach', ok: true, tx: hash });
+      } else if (action.type === 'warning' || action.type === 'clear') {
+        const riskScore = action.type === 'clear' ? 0 : (action.riskScore ?? 0);
+        const prediction = action.prediction ?? (action.type === 'clear' ? '[CLEAR] No risk detected' : '');
+        const hash = await walletClient.writeContract({
+          address: CONTRACT, abi: SLA_ABI, functionName: 'recordBreachWarning',
+          args: [BigInt(action.slaId), BigInt(riskScore), prediction],
+        });
+        console.log(`[MockAPI] CRE ${action.type} SLA ${action.slaId} tx: ${hash}`);
+        results.push({ slaId: action.slaId, type: action.type, ok: true, tx: hash });
+      }
+    } catch (err: any) {
+      console.log(`[MockAPI] CRE ${action.type} SLA ${action.slaId} failed: ${err.message?.slice(0, 200)}`);
+      results.push({ slaId: action.slaId, type: action.type, ok: false, error: err.message?.slice(0, 200) });
+    }
+  }
+
+  const succeeded = results.filter(r => r.ok).length;
+  console.log(`[MockAPI] CRE bulk execute: ${succeeded}/${actions.length} succeeded`);
+  res.json({ ok: true, total: actions.length, succeeded, results });
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`[MockAPI] OathLayer mock uptime API running on :${PORT}`);
@@ -664,6 +753,7 @@ app.listen(PORT, () => {
   console.log(`  POST /demo-breach             — breach + slash on-chain`);
   console.log(`  POST /demo-warning            — warning only (no slash)`);
   console.log(`  POST /reset                   — reset all to healthy`);
+  console.log(`  POST /cre/execute             — CRE bulk execution: breaches + warnings + clears`);
 });
 
 export default app;

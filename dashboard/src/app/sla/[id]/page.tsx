@@ -131,9 +131,9 @@ export default function SLADetail({ params }: { params: Promise<{ id: string }> 
                 // Check if this specific verdict led to a breach (same block or next block)
                 const penalized = w.penalized || breaches.some(b => Math.abs(Number(b.blockNumber) - Number(w.blockNumber)) <= 1);
                 const votes = tally.match(/^(\d+-\d+)/)?.[1] || "";
-                const label = penalized ? "PENALIZED" : isBreach ? "WARNING" : isWarning ? "WARNING" : isClear ? "CLEAR" : "ASSESSED";
-                const color = penalized ? "#ef4444" : (isBreach || isWarning) ? "#f59e0b" : "rgba(74,222,128,0.8)";
-                const bg = penalized ? "rgba(239,68,68,0.1)" : (isBreach || isWarning) ? "rgba(245,158,11,0.1)" : "rgba(74,222,128,0.08)";
+                const label = penalized ? "PENALIZED" : isBreach ? "BREACH" : isWarning ? "WARNING" : isClear ? "CLEAR" : "ASSESSED";
+                const color = penalized ? "#ef4444" : isBreach ? "#ef4444" : isWarning ? "#f59e0b" : "rgba(74,222,128,0.8)";
+                const bg = penalized ? "rgba(239,68,68,0.1)" : isBreach ? "rgba(239,68,68,0.1)" : isWarning ? "rgba(245,158,11,0.1)" : "rgba(74,222,128,0.08)";
 
                 return (
                   <div key={`${w.blockNumber}-${i}`} className="glass-card rounded-xl p-4">

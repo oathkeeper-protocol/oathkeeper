@@ -40,6 +40,7 @@ const configSchema = z.object({
   chainSelectorName: z.string(),
   worldChainContractAddress: z.string().default("").describe("WorldChainRegistry address on World Chain (empty to skip World Chain triggers)"),
   worldChainSelector: z.string().default("").describe("CCIP chain selector for World Chain (empty to skip World Chain triggers)"),
+  startSlaId: z.number().default(0).describe("Skip SLAs below this ID (used to ignore old/stale SLAs)"),
 });
 
 type Config = z.infer<typeof configSchema>;
@@ -61,6 +62,7 @@ const SLA_ABI = [
       { internalType: "address", name: "tenant", type: "address" },
       { internalType: "string", name: "serviceName", type: "string" },
       { internalType: "uint256", name: "bondAmount", type: "uint256" },
+      { internalType: "uint256", name: "initialBondAmount", type: "uint256" },
       { internalType: "uint256", name: "responseTimeHrs", type: "uint256" },
       { internalType: "uint256", name: "minUptimeBps", type: "uint256" },
       { internalType: "uint256", name: "penaltyBps", type: "uint256" },
@@ -154,32 +156,48 @@ type TribunalVerdict = {
 // --- AI Tribunal Council prompts ---
 
 const TRIBUNAL_PROMPTS = {
-  riskAnalyst: `You are a Risk Analyst for an SLA enforcement system. Analyze uptime metrics and predict breach probability in the next 24 hours. Be data-driven and objective. Consider current metrics against SLA thresholds and trend direction.
+  riskAnalyst: `You are a Risk Analyst for an SLA enforcement system. Analyze uptime metrics and vote based on these rules:
 
-For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+VOTING RULES (uptimeBps = current uptime, minUptimeBps = SLA threshold):
+- BREACH: uptimeBps < minUptimeBps (below threshold — SLA violated)
+- WARNING: uptimeBps >= minUptimeBps BUT within 5% above threshold (e.g. threshold 9500, uptime 9500-9975 = warning zone)
+- NO_BREACH: uptimeBps > minUptimeBps + 5% buffer (healthy, well above threshold)
+
+Be data-driven and objective. Set confidence based on how far from the threshold the uptime is.
+
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 80 chars>"}
 
 Respond with a JSON array of votes for all SLAs.`,
 
-  providerAdvocate: (analystAssessment: string) => `You are a Provider Advocate defending infrastructure providers against wrongful SLA penalties. Your job is to protect providers from false slashing.
+  providerAdvocate: (analystAssessment: string) => `You are a Provider Advocate defending infrastructure providers against wrongful SLA penalties.
 
 The Risk Analyst has assessed: ${analystAssessment}
 
-Find mitigating factors: temporary dips, maintenance windows, recovery trends in historical data, measurement noise, or threshold proximity that doesn't warrant action.
+VOTING RULES (uptimeBps = current uptime, minUptimeBps = SLA threshold):
+- BREACH: uptimeBps < minUptimeBps (below threshold — this is non-negotiable, the SLA is violated)
+- WARNING: uptimeBps >= minUptimeBps BUT within 5% above threshold — defend the provider but flag risk
+- NO_BREACH: uptimeBps > minUptimeBps + 5% buffer — provider is healthy, advocate for clearance
 
-Your bias is to PROTECT providers. Only vote BREACH if evidence is absolutely undeniable despite your best defense.
+IMPORTANT: If uptimeBps < minUptimeBps, you MUST vote BREACH. You cannot defend against math.
+Your advocacy applies to borderline cases (WARNING zone) and severity assessment, not denying hard breaches.
 
-For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 80 chars>"}
 
 Respond with a JSON array of votes for all SLAs.`,
 
-  enforcementJudge: (analystAssessment: string, advocateDefense: string) => `You are the Enforcement Judge in an SLA tribunal. You must weigh the Risk Analyst's findings against the Provider Advocate's defense and render a fair verdict.
+  enforcementJudge: (analystAssessment: string, advocateDefense: string) => `You are the Enforcement Judge in an SLA tribunal. Weigh the Risk Analyst's findings against the Provider Advocate's defense.
 
 Risk Analyst says: ${analystAssessment}
 Provider Advocate says: ${advocateDefense}
 
-Only vote BREACH if evidence is overwhelming despite the defense. Your vote is the tiebreaker — be deliberate.
+VOTING RULES (uptimeBps = current uptime, minUptimeBps = SLA threshold):
+- BREACH: uptimeBps < minUptimeBps and defense is insufficient — penalize
+- WARNING: uptimeBps is close to threshold (within 5% above) — issue warning, no penalty
+- NO_BREACH: uptime is healthy or defense is convincing — clear the provider
 
-For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 100 chars>"}
+Your vote is the tiebreaker — be deliberate and fair.
+
+For each SLA, respond with JSON: {"slaId": <number>, "vote": "BREACH" | "WARNING" | "NO_BREACH", "confidence": <0.0-1.0>, "reasoning": "<max 80 chars>"}
 
 Respond with a JSON array of votes for all SLAs.`,
 };
@@ -296,14 +314,26 @@ function tallyTribunalVotes(
     action = "BREACH";
     tally = `${votes.length}-0 BREACH`;
   } else if (breachVotes.length > votes.length / 2) {
-    action = "WARNING"; // Majority breach but not unanimous → high-confidence warning
+    action = "BREACH"; // Majority breach → breach verdict
     tally = `${breachVotes.length}-${votes.length - breachVotes.length} BREACH`;
   } else if (noBreachVotes.length === votes.length) {
     action = "NONE";
     tally = `0-${votes.length} CLEAR`;
   } else {
-    action = warningVotes.length > 0 ? "WARNING" : "NONE";
-    tally = `${breachVotes.length}-${noBreachVotes.length} SPLIT`;
+    // WARNING votes count as "for" (pro-action)
+    const forVotes = breachVotes.length + warningVotes.length;
+    const againstVotes = noBreachVotes.length;
+    if (forVotes > againstVotes) {
+      action = "WARNING";
+      tally = `${forVotes}-${againstVotes} WARNING`;
+    } else if (againstVotes > forVotes) {
+      action = "NONE";
+      tally = `${forVotes}-${againstVotes} CLEAR`;
+    } else {
+      // True split — Judge tiebreak via weighted confidence
+      action = warningVotes.length > 0 ? "WARNING" : "NONE";
+      tally = `${forVotes}-${againstVotes} SPLIT`;
+    }
   }
 
   // Build summary: who voted what
@@ -361,7 +391,7 @@ function readSla(
   const data = hex.slice(2); // remove 0x prefix
   // Each ABI slot is 32 bytes = 64 hex chars
   // Slots: 0=provider, 1=tenant, 2=serviceName(offset), 3=bondAmount,
-  //        4=responseTimeHrs, 5=minUptimeBps, 6=penaltyBps, 7=createdAt, 8=active
+  //        4=initialBondAmount, 5=responseTimeHrs, 6=minUptimeBps, 7=penaltyBps, 8=createdAt, 9=active
   const slot = (i: number): string => {
     const s = data.slice(i * 64, (i + 1) * 64);
     return s.length > 0 ? s : "0".repeat(64);
@@ -384,9 +414,9 @@ function readSla(
     tenant: addrFromSlot(1),
     serviceName,
     bondAmount: BigInt(0), // not used in scan logic, skip large number parsing
-    minUptimeBps: BigInt(numFromSlot(5)),
-    penaltyBps: BigInt(numFromSlot(6)),
-    active: boolFromSlot(8),
+    minUptimeBps: BigInt(numFromSlot(6)),
+    penaltyBps: BigInt(numFromSlot(7)),
+    active: boolFromSlot(9),
   };
 }
 
@@ -410,6 +440,59 @@ function writeBreach(
   }).result();
 }
 
+// Bulk execute on-chain writes via mock API — single ConfidentialHTTPClient call.
+// Collects all breach/warning/clear actions and sends them in one POST.
+type CREAction = {
+  type: "breach" | "warning" | "clear";
+  slaId: number;
+  uptimeBps?: number;
+  riskScore?: number;
+  prediction?: string;
+};
+
+function executeBulkViaMockAPI(
+  runtime: Runtime<Config>,
+  actions: CREAction[],
+  apiKey: string
+): void {
+  if (actions.length === 0) return;
+
+  try {
+    const config = runtime.config;
+    const confidentialClient = new cre.capabilities.ConfidentialHTTPClient();
+    const response = confidentialClient.sendRequest(runtime, {
+      request: {
+        url: `${config.uptimeApiUrl}/cre/execute`,
+        method: "POST",
+        multiHeaders: {
+          "Content-Type": { values: ["application/json"] },
+          "x-admin-token": { values: [apiKey] },
+        },
+        bodyString: JSON.stringify({ actions }),
+      },
+    }).result();
+
+    if (!ok(response)) {
+      runtime.log(`[OathLayer] Bulk execute HTTP ${response.statusCode}`);
+      return;
+    }
+    const result = JSON.parse(new TextDecoder().decode(response.body)) as {
+      ok: boolean; total: number; succeeded: number;
+      results: { slaId: number; type: string; ok: boolean; tx?: string; error?: string }[];
+    };
+    runtime.log(`[OathLayer] Bulk execute: ${result.succeeded}/${result.total} on-chain writes succeeded`);
+    for (const r of result.results) {
+      if (r.ok) {
+        runtime.log(`[OathLayer]   SLA ${r.slaId} ${r.type}: tx ${r.tx}`);
+      } else {
+        runtime.log(`[OathLayer]   SLA ${r.slaId} ${r.type}: FAILED ${r.error}`);
+      }
+    }
+  } catch (e) {
+    runtime.log(`[OathLayer] Bulk execute failed: ${(e as Error).message}`);
+  }
+}
+
 // --- Core SLA scan logic (shared by cron and log handlers) ---
 function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount: number } {
   const config = runtime.config;
@@ -428,10 +511,19 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
   const apiKey = runtime.getSecret({ id: "UPTIME_API_KEY" }).result().value || "demo-key";
 
   const slaCount = readSlaCount(runtime, evmClient, contractAddress);
-  runtime.log(`[OathLayer] Checking ${slaCount} SLAs`);
+  const startId = config.startSlaId ?? 0;
+  runtime.log(`[OathLayer] Checking SLAs ${startId}..${Number(slaCount) - 1} (${Number(slaCount) - startId} active)`);
+
+  // CRE hard limit: 10 writeReport calls per workflow execution.
+  // Budget breaches first (hard-check loop), then tribunal breaches, then warnings.
+  const CRE_WRITE_LIMIT = 10;
+  let writesUsed = 0;
 
   let breachCount = 0;
   const breachedInLoop = new Set<number>();
+
+  // Collect all on-chain actions for bulk execution via mock API
+  const pendingActions: CREAction[] = [];
 
   // Collect active SLA metrics for batched AI Tribunal deliberation
   const activeSLAMetrics: { slaId: number; provider: Address; uptimeBps: number; minUptimeBps: number }[] = [];
@@ -439,7 +531,7 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
   // Cache uptime per provider to avoid hitting CRE's 5 HTTP call limit
   const uptimeCache: Record<string, number> = {};
 
-  for (let i = 0; i < Number(slaCount); i++) {
+  for (let i = startId; i < Number(slaCount); i++) {
     const sla = readSla(runtime, evmClient, contractAddress, i);
     if (!sla.active) continue;
 
@@ -476,10 +568,16 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
     runtime.log(`[OathLayer] SLA ${i}: ${uptimeBps} bps (min: ${minUptimeBps})`);
 
     if (uptimeBps < minUptimeBps) {
+      if (writesUsed >= CRE_WRITE_LIMIT) {
+        runtime.log(`[OathLayer] BREACH SLA ${i}: ${uptimeBps} < ${minUptimeBps} — SKIPPED (write budget exhausted)`);
+        continue;
+      }
       runtime.log(`[OathLayer] BREACH SLA ${i}: ${uptimeBps} < ${minUptimeBps} — slashing bond`);
       writeBreach(runtime, evmClient, contractAddress, i, uptimeBps);
+      pendingActions.push({ type: "breach", slaId: i, uptimeBps });
       breachedInLoop.add(i);
       breachCount++;
+      writesUsed++;
     }
 
     activeSLAMetrics.push({ slaId: i, provider: sla.provider, uptimeBps, minUptimeBps });
@@ -492,40 +590,16 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
 
   if (activeSLAMetrics.length > 0) {
     try {
-      const groqKey = runtime.getSecret({ id: "GROQ_API_KEY" }).result().value;
-      if (!groqKey) throw new Error("GROQ_API_KEY secret not configured");
+      // Rotate Groq API keys across agents to avoid per-key rate limits
+      const groqKey1 = runtime.getSecret({ id: "GROQ_API_KEY" }).result().value;
+      const groqKey2 = runtime.getSecret({ id: "GROQ_API_KEY_2" }).result().value || groqKey1;
+      const groqKey3 = runtime.getSecret({ id: "GROQ_API_KEY_3" }).result().value || groqKey1;
+      if (!groqKey1) throw new Error("GROQ_API_KEY secret not configured");
+      const groqKeys = [groqKey1, groqKey2, groqKey3];
 
-      // Fetch historical uptime per unique provider (cached to stay within CRE HTTP limit)
-      const providerHistories: Record<string, { timestamp: string; uptimePercent: number }[]> = {};
-      for (const metric of activeSLAMetrics) {
-        if (providerHistories[metric.provider] !== undefined) continue; // already fetched
-        try {
-          const historyData = runtime.runInNodeMode(
-            (nodeRuntime) => {
-              const response = httpClient.sendRequest(nodeRuntime, {
-                url: `${config.uptimeApiUrl}/provider/${metric.provider}/history`,
-                method: "GET",
-                headers: { Authorization: `Bearer ${apiKey}` },
-              }).result();
-              if (!ok(response)) throw new Error(`HTTP ${response.statusCode}`);
-              return json(response);
-            },
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            consensusIdenticalAggregation() as any
-          )().result() as { history: { timestamp: string; uptimePercent: number }[] };
-          providerHistories[metric.provider] = historyData.history;
-        } catch {
-          // History fetch is best-effort — Advocate works without it
-          providerHistories[metric.provider] = [];
-        }
-      }
-
-      const metricsWithHistory = activeSLAMetrics.map(m => ({
-        ...m,
-        history: providerHistories[m.provider] ?? [],
-      }));
-
-      const metricsJson = JSON.stringify(metricsWithHistory);
+      // Skip history fetch to stay within CRE 5 HTTP call limit
+      // (1 uptime + 3 Groq agents + 1 bulk execute = 5)
+      const metricsJson = JSON.stringify(activeSLAMetrics);
 
       // --- Agent 1: Risk Analyst (temperature 0 — strict data analysis) ---
       runtime.log("[OathLayer] Tribunal: Risk Analyst evaluating...");
@@ -534,8 +608,8 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
         analystVotes = callTribunalAgent(
           runtime,
           TRIBUNAL_PROMPTS.riskAnalyst,
-          `Current SLA metrics with 7-day history:\n${metricsJson}`,
-          groqKey,
+          `Current SLA metrics:\n${metricsJson}`,
+          groqKeys[0],
           0
         );
       } catch (e) {
@@ -553,8 +627,8 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
         advocateVotes = callTribunalAgent(
           runtime,
           TRIBUNAL_PROMPTS.providerAdvocate(analystSummary),
-          `Current SLA metrics with 7-day history:\n${metricsJson}`,
-          groqKey,
+          `Current SLA metrics:\n${metricsJson}`,
+          groqKeys[1],
           0.3
         );
       } catch (e) {
@@ -572,8 +646,8 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
         judgeVotes = callTribunalAgent(
           runtime,
           TRIBUNAL_PROMPTS.enforcementJudge(analystSummary, advocateSummary),
-          `Current SLA metrics with 7-day history:\n${metricsJson}`,
-          groqKey,
+          `Current SLA metrics:\n${metricsJson}`,
+          groqKeys[2],
           0
         );
       } catch (e) {
@@ -589,46 +663,84 @@ function scanSLAs(runtime: Runtime<Config>): { breachCount: number; warningCount
       if (!sepoliaNetwork) throw new Error("Sepolia network not found");
       const sepoliaClient = new cre.capabilities.EVMClient(sepoliaNetwork.chainSelector.selector);
 
+      // Tally all verdicts first, then write in priority order: breaches > warnings
+      const verdicts: (TribunalVerdict & { uptimeBps: number })[] = [];
       for (const metric of activeSLAMetrics) {
         const analystVote = analystVotes.find(v => v.slaId === metric.slaId)?.vote;
         const advocateVote = advocateVotes.find(v => v.slaId === metric.slaId)?.vote;
         const judgeVote = judgeVotes.find(v => v.slaId === metric.slaId)?.vote;
 
         const verdict = tallyTribunalVotes(metric.slaId, analystVote, advocateVote, judgeVote);
-
         runtime.log(`[OathLayer] Tribunal SLA ${metric.slaId}: ${verdict.tally} (confidence: ${verdict.councilConfidence})`);
 
-        if (verdict.action === "BREACH" && !breachedInLoop.has(metric.slaId)) {
-          // Unanimous breach — record breach (slashing), skip if already breached in hard-check
-          runtime.log(`[OathLayer] TRIBUNAL BREACH SLA ${metric.slaId}: unanimous — slashing bond`);
-          writeBreach(runtime, evmClient, contractAddress, metric.slaId, metric.uptimeBps);
-          breachCount++;
-        } else if (verdict.action === "WARNING") {
-          // Majority breach or warning votes — record as breach warning
-          const confidenceScore = Math.round(verdict.councilConfidence * 100);
-          const truncatedSummary = verdict.summary.slice(0, 200);
-          runtime.log(`[OathLayer] TRIBUNAL WARNING SLA ${metric.slaId}: ${truncatedSummary}`);
+        // For breached SLAs, still record the tribunal verdict (audit trail) but skip duplicate breach
+        const alreadyBreached = breachedInLoop.has(metric.slaId);
 
-          const callData = encodeFunctionData({
-            abi: RELAY_ABI,
-            functionName: "recordBreachWarning",
-            args: [BigInt(metric.slaId), BigInt(confidenceScore), truncatedSummary],
-          });
-          const report = runtime.report(prepareReportRequest(callData)).result();
-          sepoliaClient.writeReport(runtime, {
-            receiver: toHex(toBytes(contractAddress, { size: 20 })),
-            report,
-          }).result();
-          warningCount++;
+        if (verdict.action === "NONE") {
+          // CLEAR — record riskScore=0 on-chain for full audit trail
+          pendingActions.push({ type: "clear", slaId: metric.slaId, riskScore: 0, prediction: verdict.summary.slice(0, 200) });
+        } else if (alreadyBreached) {
+          // Already breached — record verdict as warning (audit trail) but don't slash again
+          const riskScore = Math.round(verdict.councilConfidence * 100);
+          pendingActions.push({ type: "warning", slaId: metric.slaId, riskScore, prediction: verdict.summary.slice(0, 200) });
+          runtime.log(`[OathLayer] Tribunal SLA ${metric.slaId}: recording verdict (already breached, no double-slash)`);
+        } else {
+          verdicts.push({ ...verdict, uptimeBps: metric.uptimeBps });
         }
-        // NONE = unanimous no-breach, skip
       }
 
-      runtime.log(`[OathLayer] Tribunal complete: ${activeSLAMetrics.length} SLAs deliberated, ${warningCount} warnings, ${breachCount} breaches`);
+      // Write breaches first (higher priority — slashes bond)
+      const tribunalBreaches = verdicts.filter(v => v.action === "BREACH");
+      const tribunalWarnings = verdicts.filter(v => v.action === "WARNING");
+
+      for (const verdict of tribunalBreaches) {
+        if (writesUsed >= CRE_WRITE_LIMIT) {
+          runtime.log(`[OathLayer] TRIBUNAL BREACH SLA ${verdict.slaId}: SKIPPED (write budget exhausted, ${writesUsed}/${CRE_WRITE_LIMIT})`);
+          continue;
+        }
+        runtime.log(`[OathLayer] TRIBUNAL BREACH SLA ${verdict.slaId}: unanimous — slashing bond`);
+        writeBreach(runtime, evmClient, contractAddress, verdict.slaId, verdict.uptimeBps);
+        pendingActions.push({ type: "breach", slaId: verdict.slaId, uptimeBps: verdict.uptimeBps });
+        breachCount++;
+        writesUsed++;
+      }
+
+      for (const verdict of tribunalWarnings) {
+        if (writesUsed >= CRE_WRITE_LIMIT) {
+          runtime.log(`[OathLayer] TRIBUNAL WARNING SLA ${verdict.slaId}: SKIPPED (write budget exhausted, ${writesUsed}/${CRE_WRITE_LIMIT})`);
+          continue;
+        }
+        const confidenceScore = Math.round(verdict.councilConfidence * 100);
+        const truncatedSummary = verdict.summary.slice(0, 200);
+        runtime.log(`[OathLayer] TRIBUNAL WARNING SLA ${verdict.slaId}: ${truncatedSummary}`);
+
+        const callData = encodeFunctionData({
+          abi: RELAY_ABI,
+          functionName: "recordBreachWarning",
+          args: [BigInt(verdict.slaId), BigInt(confidenceScore), truncatedSummary],
+        });
+        const report = runtime.report(prepareReportRequest(callData)).result();
+        sepoliaClient.writeReport(runtime, {
+          receiver: toHex(toBytes(contractAddress, { size: 20 })),
+          report,
+        }).result();
+        pendingActions.push({ type: "warning", slaId: verdict.slaId, riskScore: confidenceScore, prediction: truncatedSummary });
+        warningCount++;
+        writesUsed++;
+      }
+
+      runtime.log(`[OathLayer] Tribunal complete: ${activeSLAMetrics.length} SLAs deliberated, ${breachCount} breaches, ${warningCount} warnings (${writesUsed}/${CRE_WRITE_LIMIT} writes used)`);
     } catch (e) {
       // Fail silently — better to miss a warning than emit a false one
       runtime.log(`[OathLayer] Tribunal failed: ${(e as Error).message}`);
     }
+  }
+
+  // Bulk execute all on-chain writes via mock API (single ConfidentialHTTPClient call)
+  // This is the actual on-chain execution — writeReport doesn't broadcast in simulation mode
+  if (pendingActions.length > 0) {
+    runtime.log(`[OathLayer] Executing ${pendingActions.length} on-chain actions via mock API...`);
+    executeBulkViaMockAPI(runtime, pendingActions, apiKey);
   }
 
   runtime.log(`[OathLayer] Done. Breaches: ${breachCount}, Warnings: ${warningCount}`);

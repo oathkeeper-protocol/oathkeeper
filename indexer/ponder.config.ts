@@ -7,6 +7,7 @@ export default createConfig({
     sepolia: {
       id: 11155111,
       rpc: process.env.PONDER_RPC_URL || "https://virtual.sepolia.eu.rpc.tenderly.co/47ad454d-8109-4ccb-9285-7ab201835e5d",
+      finalityBlockCount: 1,
     },
   },
   contracts: {

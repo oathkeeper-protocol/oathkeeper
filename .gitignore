@@ -11,3 +11,6 @@ secrets.yaml
 project.yaml
 .cre_build_tmp.*
 .serena/
+video/
+.next/
+indexer/generated/

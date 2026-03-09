@@ -68,8 +68,8 @@ export default function AllSLAs() {
 
   const slas: SLAData[] = (slaResults ?? []).map((result, i) => {
     if (result.status !== "success" || !result.result) return null;
-    const r = result.result as readonly [string, string, string, bigint, bigint, bigint, bigint, bigint, boolean];
-    return { id: i, provider: r[0], tenant: r[1], serviceName: r[2], bondAmount: r[3], responseTimeHrs: r[4], minUptimeBps: r[5], penaltyBps: r[6], createdAt: r[7], active: r[8] };
+    const r = result.result as readonly [string, string, string, bigint, bigint, bigint, bigint, bigint, bigint, boolean];
+    return { id: i, provider: r[0], tenant: r[1], serviceName: r[2], bondAmount: r[3], responseTimeHrs: r[5], minUptimeBps: r[6], penaltyBps: r[7], createdAt: r[8], active: r[9] };
   }).filter(Boolean) as SLAData[];
 
   const [warnings, setWarnings] = useState<BreachWarningEvent[]>([]);
